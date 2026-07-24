@@ -6,6 +6,7 @@ import '../../audio/audio_input.dart';
 import '../../modem/bfsk_demodulator.dart';
 import '../../modem/modem_config.dart';
 import '../../modem/streaming_decoder.dart';
+import '../../shared/utils/app_logger.dart';
 import '../../workers/decoder_worker.dart';
 
 /// A message shown in the receive history.
@@ -103,6 +104,7 @@ class ReceiveController extends ChangeNotifier {
               ? e.message
               : 'Ошибка аудио: $e';
           _micStatus = 'Ошибка микрофона';
+          AppLogger.error('Ошибка аудиопотока', e);
           notifyListeners();
         },
       );
@@ -110,15 +112,18 @@ class ReceiveController extends ChangeNotifier {
       _isReceiving = true;
       _micStatus = 'Слушаю ($_activeRate Гц)';
       _lastMessageStart = DateTime.now();
+      AppLogger.info('Приём запущен ($_activeRate Гц) | ${config.summary}');
       notifyListeners();
-    } on AudioInputException catch (e) {
+    } on AudioInputException catch (e, st) {
       _errorText = e.message;
       _micStatus = 'Ошибка микрофона';
+      AppLogger.error('Не удалось запустить приём (микрофон)', e, st);
       await _cleanup();
       notifyListeners();
-    } catch (e) {
+    } catch (e, st) {
       _errorText = 'Не удалось запустить приём: $e';
       _micStatus = 'Ошибка';
+      AppLogger.error('Не удалось запустить приём', e, st);
       await _cleanup();
       notifyListeners();
     }
@@ -197,15 +202,37 @@ class ReceiveController extends ChangeNotifier {
         _measuredBitRate = event.message!.text.length * 8 * 1000 / elapsed;
       }
       _lastMessageStart = DateTime.now();
+      AppLogger.info(
+        'Сообщение принято: "${_truncate(text)}" '
+        '(пакетов=${event.message!.packetCount}, ${_diagString(d)})',
+      );
     }
 
-    if (event.state == DecoderState.error) {
+    // Only act on *real* error events (which carry errorText). The decoder's
+    // error state is sticky and re-emitted on every level tick, so gating on
+    // errorText avoids spamming logs and over-counting CRC errors.
+    if (event.state == DecoderState.error && event.errorText != null) {
       _crcErrors++;
       _errorText = event.errorText;
+      AppLogger.error(
+        'Ошибка приёма: ${event.errorText} '
+        '(${_diagString(d)}, всего ошибок=$_crcErrors)',
+      );
     }
 
     notifyListeners();
   }
+
+  String _diagString(DemodDiagnostics d) =>
+      'SNR=${d.snr.toStringAsFixed(1)} '
+      'e0=${d.energy0.toStringAsFixed(0)} e1=${d.energy1.toStringAsFixed(0)} '
+      'noise=${d.noiseFloor.toStringAsFixed(4)} '
+      'preamble=${d.preambleScore.toStringAsFixed(2)} '
+      'conf=${d.confidence.toStringAsFixed(2)} '
+      'bits=${d.bitCount} corrected=${d.correctedBits} crcOk=${d.crcOk}';
+
+  String _truncate(String s, [int max = 40]) =>
+      s.length <= max ? s : '${s.substring(0, max)}…';
 
   void _pushEnergy(double value) {
     _energyHistory.add(value);

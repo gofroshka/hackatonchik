@@ -125,13 +125,18 @@ class BfskDemodulator {
     double minPreambleScore = 0.35,
   }) {
     final s = config.samplesPerSymbol;
-    // Bound the preamble search to a window just large enough to contain a
-    // whole preamble plus slack. Without this bound the synchronizer takes the
-    // global maximum over the ENTIRE remaining buffer on every call, which for
-    // a long multi-packet transmission is O(packets × bufferLength) and hangs
-    // the decoder isolate. The next packet's preamble always begins near
-    // [searchStart], so a two-preamble window is more than enough.
-    final windowEnd = searchStart + config.preambleBits * s * 2;
+    // Bound the preamble search to a window large enough to contain the leading
+    // pre-roll silence the ring buffer keeps (up to ~1 s), the whole preamble,
+    // and slack — but NOT the entire multi-second buffer. Without this bound the
+    // synchronizer takes the global maximum over the whole remaining buffer on
+    // every call, which for a long multi-packet transmission is
+    // O(packets × bufferLength) and hangs the decoder isolate.
+    //
+    // The window must reach past the pre-roll so the real preamble start is
+    // inside it; a too-tight window makes the synchronizer lock onto a
+    // misaligned partial match (low preamble score, garbage header).
+    final windowEnd =
+        searchStart + config.sampleRate * 2 + config.preambleBits * s;
     final searchEnd = windowEnd < samples.length ? windowEnd : samples.length;
     final preamble = _sync.search(
       samples,
@@ -173,9 +178,16 @@ class BfskDemodulator {
 
     // Misaligned preamble or garbage header: skip past it and keep searching.
     if (!syncOk || length > config.maxPayloadLength) {
+      final noiseFloor = _preambleNoiseFloor(samples, preamble.startSample);
+      final signalEnergy = head.lastE0 + head.lastE1;
       return FrameDecodeResult(
         status: PacketDecodeStatus.crcError,
         diagnostics: DemodDiagnostics(
+          energy0: head.lastE0,
+          energy1: head.lastE1,
+          noiseFloor: noiseFloor,
+          snr: noiseFloor > 0 ? signalEnergy / noiseFloor : 0.0,
+          confidence: head.bits.isEmpty ? 0.0 : head.confSum / head.bits.length,
           offset: preamble.startSample,
           preambleScore: preamble.score,
           bitCount: headerDecoded.bits.length,

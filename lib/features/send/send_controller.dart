@@ -8,6 +8,7 @@ import '../../audio/audio_output.dart';
 import '../../modem/acoustic_modem.dart';
 import '../../modem/modem_config.dart';
 import '../../protocol/packet.dart';
+import '../../shared/utils/app_logger.dart';
 
 /// Drives text -> audio transmission through the device speaker.
 class SendController extends ChangeNotifier {
@@ -69,12 +70,18 @@ class SendController extends ChangeNotifier {
       notifyListeners();
     });
 
+    AppLogger.info(
+      'Передача начата: $_packetCount пакет(ов), $_payloadBytes байт, '
+      '~${_estimatedSeconds.toStringAsFixed(1)}с | ${config.summary}',
+    );
     try {
       await _output.play(encoded.pcm, sampleRate: config.sampleRate);
       _progress = 1;
       _status = 'Передача завершена';
-    } catch (e) {
+      AppLogger.info('Передача завершена');
+    } catch (e, st) {
       _status = 'Ошибка передачи: $e';
+      AppLogger.error('Ошибка передачи', e, st);
     } finally {
       _progressTimer?.cancel();
       _progressTimer = null;

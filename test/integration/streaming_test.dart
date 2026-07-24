@@ -55,6 +55,51 @@ void main() {
     expect(decoded, contains(message));
   });
 
+  test('StreamingDecoder decodes with a long (>1 s) pre-roll of ambient noise',
+      () {
+    // Regression: the bounded preamble-search window must reach past the
+    // pre-roll silence the ring buffer retains (up to ~1 s). A too-tight window
+    // makes the synchronizer lock onto a misaligned partial match (low preamble
+    // score, garbage header, CRC error) even with a strong, clean signal.
+    final modem = AcousticModem();
+    const message = 'HELLO FROM AUDIO';
+    final signal = PcmConverter.int16ToFloat(modem.encode(message).pcm);
+
+    final rng = Random(21);
+    const ambient = 0.006;
+    const gain = 0.4;
+    double noise() => (rng.nextDouble() * 2 - 1) * ambient;
+
+    final builder = <double>[];
+    // 1.2 s of ambient before the signal — longer than the ring buffer's
+    // retained pre-roll, exercising the search window bound.
+    for (int i = 0; i < 57600; i++) {
+      builder.add(noise());
+    }
+    for (int i = 0; i < signal.length; i++) {
+      builder.add((signal[i] * gain + noise()).clamp(-1.0, 1.0));
+    }
+    for (int i = 0; i < 24000; i++) {
+      builder.add(noise());
+    }
+
+    final input = Float64List.fromList(builder);
+    final decoder = StreamingDecoder();
+    final decoded = <String>[];
+    const chunkSize = 2048;
+    for (int off = 0; off < input.length; off += chunkSize) {
+      final end = (off + chunkSize).clamp(0, input.length);
+      final chunk = Float64List.sublistView(input, off, end);
+      for (final e in decoder.addSamples(chunk)) {
+        if (e.state == DecoderState.messageReceived && e.message != null) {
+          decoded.add(e.message!.text);
+        }
+      }
+    }
+
+    expect(decoded, contains(message));
+  });
+
   test('StreamingDecoder decodes a QUIET source under low-freq room rumble',
       () {
     final modem = AcousticModem();

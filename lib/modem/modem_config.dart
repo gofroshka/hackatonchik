@@ -14,11 +14,11 @@ class ModemConfig {
     this.sampleRate = 48000,
     this.freq0 = 1500,
     this.freq1 = 2500,
-    this.symbolDurationMs = 40,
+    this.symbolDurationMs = 20,
     this.amplitude = 0.5,
-    this.preambleBits = 64,
-    this.repetitionFactor = 3,
-    this.frequencyTransitionMs = 3.0,
+    this.preambleBits = 32,
+    this.repetitionFactor = 2,
+    this.frequencyTransitionMs = 2.0,
     this.bandpassLow = 1100,
     this.bandpassHigh = 2900,
     this.leadingSilenceMs = 120,
@@ -113,6 +113,13 @@ class ModemConfig {
 
   /// Protocol version byte.
   static const int protocolVersion = 1;
+
+  /// One-line summary of the parameters that MUST match between the sending and
+  /// receiving devices for decoding to succeed. Logged on start so a mismatch
+  /// between two builds is immediately obvious.
+  String get summary =>
+      'f0=$freq0 f1=$freq1 sym=${symbolDurationMs}ms rep=$repetitionFactor '
+      'preamble=$preambleBits trans=${frequencyTransitionMs}ms rate=$sampleRate';
 
   /// Total bit rate (payload independent) in bits per second before coding.
   double get rawBitRate => 1000.0 / symbolDurationMs;
