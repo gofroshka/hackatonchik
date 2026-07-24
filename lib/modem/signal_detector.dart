@@ -12,8 +12,8 @@ import 'dart:typed_data';
 /// what triggers decoding.
 class SignalDetector {
   SignalDetector({
-    this.snrThreshold = 3.0,
-    this.absoluteFloor = 2e-3,
+    this.snrThreshold = 2.5,
+    this.absoluteFloor = 1e-3,
   });
 
   /// Linear SNR above the noise floor required to declare "signal present".

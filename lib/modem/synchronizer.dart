@@ -103,6 +103,29 @@ class Synchronizer {
       );
     }
 
+    // Verify that the preamble region actually contains meaningful energy and
+    // is not just a pattern accidentally matched by noise. The Goertzel energy
+    // for a full-scale sine over coreSymbolSamples (~1776) is ~800k, so a
+    // threshold of 5.0 corresponds to an amplitude of roughly 0.002 — anything
+    // below that is effectively silence.
+    double totalEnergy = 0;
+    int energyCount = 0;
+    for (int k = 0; k < config.preambleBits; k++) {
+      final pos = bestStart + k * s;
+      if (pos + s > samples.length) break;
+      final core = pos + _guard;
+      totalEnergy += _g0.energy(samples, start: core);
+      totalEnergy += _g1.energy(samples, start: core);
+      energyCount++;
+    }
+    if (energyCount > 0 && totalEnergy / energyCount < config.minSymbolEnergy) {
+      return PreambleSearchResult(
+        found: false,
+        startSample: bestStart,
+        score: bestScore,
+      );
+    }
+
     return PreambleSearchResult(
       found: true,
       startSample: bestStart,

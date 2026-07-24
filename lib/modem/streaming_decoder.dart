@@ -153,11 +153,11 @@ class StreamingDecoder {
     DemodDiagnostics lastDiag = const DemodDiagnostics();
     int guard = 0;
 
-    while (searchStart + config.preambleBits * s < samples.length) {
+     while (searchStart + config.preambleBits * s < samples.length) {
       final frame = _demodulator.decodeFrame(
         samples,
         searchStart: searchStart,
-        minPreambleScore: 0.25,
+        minPreambleScore: 0.2,
       );
       lastDiag = frame.diagnostics;
 

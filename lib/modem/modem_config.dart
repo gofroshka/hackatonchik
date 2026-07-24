@@ -15,7 +15,7 @@ class ModemConfig {
     this.freq0 = 1500,
     this.freq1 = 2500,
     this.symbolDurationMs = 40,
-    this.amplitude = 0.7,
+    this.amplitude = 0.5,
     this.preambleBits = 64,
     this.repetitionFactor = 3,
     this.frequencyTransitionMs = 3.0,
@@ -26,8 +26,8 @@ class ModemConfig {
     this.rampSamples = 24,
     this.maxPayloadLength = 128,
     this.confidenceThreshold = 0.12,
-    this.minSymbolEnergy = 1e6,
-    this.snrThreshold = 3.0,
+    this.minSymbolEnergy = 5.0,
+    this.snrThreshold = 2.5,
   });
 
   /// Sampling frequency in Hz. Must match on both playback and capture.

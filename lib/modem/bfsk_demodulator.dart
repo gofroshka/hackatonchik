@@ -125,9 +125,18 @@ class BfskDemodulator {
     double minPreambleScore = 0.35,
   }) {
     final s = config.samplesPerSymbol;
+    // Bound the preamble search to a window just large enough to contain a
+    // whole preamble plus slack. Without this bound the synchronizer takes the
+    // global maximum over the ENTIRE remaining buffer on every call, which for
+    // a long multi-packet transmission is O(packets × bufferLength) and hangs
+    // the decoder isolate. The next packet's preamble always begins near
+    // [searchStart], so a two-preamble window is more than enough.
+    final windowEnd = searchStart + config.preambleBits * s * 2;
+    final searchEnd = windowEnd < samples.length ? windowEnd : samples.length;
     final preamble = _sync.search(
       samples,
       searchStart: searchStart,
+      searchEnd: searchEnd,
       minScore: minPreambleScore,
     );
 

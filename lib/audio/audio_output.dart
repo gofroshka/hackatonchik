@@ -1,103 +1,64 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:path_provider/path_provider.dart';
 
-/// Plays 16-bit signed PCM through the device speaker using a feed-callback
-/// driven queue so large buffers stream smoothly without gaps.
+import '../shared/utils/wav_utils.dart';
+
 class AudioOutput {
-  AudioOutput({this.feedThreshold = 16000});
+  final AudioPlayer _player = AudioPlayer();
+  File? _tempFile;
+  StreamSubscription? _stateSub;
+  bool _playing = false;
 
-  /// Number of frames pushed per feed. A large cushion (~0.5 s at 48 kHz)
-  /// prevents speaker buffer underruns, which are audible as crackling and also
-  /// corrupt the transmitted signal.
-  static const int _chunkFrames = 24000;
+  bool get isPlaying => _playing;
 
-  /// When the plugin's internal queue falls below this many frames the feed
-  /// callback fires so we can push more data.
-  final int feedThreshold;
-
-  bool _initialized = false;
-  Int16List _pending = Int16List(0);
-  int _position = 0;
-  Completer<void>? _completer;
-  bool _stopped = false;
-  int _configuredSampleRate = 0;
-
-  bool get isPlaying => _completer != null && !_completer!.isCompleted;
-
-  Future<void> _ensureSetup(int sampleRate) async {
-    if (_initialized && _configuredSampleRate == sampleRate) return;
-    FlutterPcmSound.setLogLevel(LogLevel.none);
-    await FlutterPcmSound.setup(sampleRate: sampleRate, channelCount: 1);
-    FlutterPcmSound.setFeedThreshold(feedThreshold);
-    FlutterPcmSound.setFeedCallback(_onFeed);
-    _initialized = true;
-    _configuredSampleRate = sampleRate;
-  }
-
-  /// Plays [pcm]. The returned future completes when playback finishes or is
-  /// stopped.
   Future<void> play(Int16List pcm, {required int sampleRate}) async {
     await stop();
-    await _ensureSetup(sampleRate);
 
-    _pending = pcm;
-    _position = 0;
-    _stopped = false;
-    _completer = Completer<void>();
+    final wav = WavUtils.encode(pcm, sampleRate: sampleRate);
+    final dir = await getTemporaryDirectory();
+    // The temporary directory (e.g. the sandboxed Caches subfolder on macOS)
+    // is not guaranteed to exist yet — create it before writing.
+    await dir.create(recursive: true);
+    final file = File('${dir.path}/audio_${DateTime.now().microsecondsSinceEpoch}.wav');
+    await file.writeAsBytes(wav, flush: true);
+    _tempFile = file;
 
-    // Kick off playback by feeding the first chunk.
-    _feedNext(0);
-    FlutterPcmSound.start();
-
-    return _completer!.future;
-  }
-
-  void _onFeed(int remainingFrames) {
-    if (_stopped) return;
-    _feedNext(remainingFrames);
-  }
-
-  void _feedNext(int remainingFrames) {
-    if (_stopped) return;
-    if (_position >= _pending.length) {
-      // Nothing left to feed; when the queue drains, playback is done.
-      if (remainingFrames == 0) {
-        _complete();
+    final completer = Completer<void>();
+    _stateSub = _player.onPlayerStateChanged.listen((state) {
+      if (state == PlayerState.completed) {
+        if (!completer.isCompleted) completer.complete();
       }
-      return;
-    }
-    final end = (_position + _chunkFrames).clamp(0, _pending.length);
-    final slice = _pending.sublist(_position, end);
-    _position = end;
-    FlutterPcmSound.feed(PcmArrayInt16(bytes: slice.buffer.asByteData(
-      slice.offsetInBytes,
-      slice.lengthInBytes,
-    )));
+    });
+
+    await _player.play(DeviceFileSource(file.path));
+    _playing = true;
+    return completer.future;
   }
 
-  void _complete() {
-    if (_completer != null && !_completer!.isCompleted) {
-      _completer!.complete();
-    }
-  }
-
-  /// Stops any current playback.
   Future<void> stop() async {
-    _stopped = true;
-    _position = _pending.length;
-    _complete();
-    _completer = null;
+    _playing = false;
+    await _stateSub?.cancel();
+    _stateSub = null;
+    await _player.stop();
+    await _deleteTempFile();
   }
 
-  /// Releases native audio resources.
+  Future<void> _deleteTempFile() async {
+    final file = _tempFile;
+    if (file != null && file.existsSync()) {
+      try {
+        await file.delete();
+      } catch (_) {}
+    }
+    _tempFile = null;
+  }
+
   Future<void> dispose() async {
     await stop();
-    if (_initialized) {
-      FlutterPcmSound.setFeedCallback(null);
-      await FlutterPcmSound.release();
-      _initialized = false;
-    }
+    _player.dispose();
   }
 }
