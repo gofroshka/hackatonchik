@@ -33,18 +33,20 @@ class PreambleSearchResult {
 /// energy best matches the expected alternating tone pattern is selected.
 class Synchronizer {
   Synchronizer(this.config)
-      : _g0 = Goertzel(
+      : _guard = config.symbolGuardSamples,
+        _g0 = Goertzel(
           targetFrequency: config.freq0.toDouble(),
           sampleRate: config.sampleRate,
-          blockSize: config.samplesPerSymbol,
+          blockSize: config.coreSymbolSamples,
         ),
         _g1 = Goertzel(
           targetFrequency: config.freq1.toDouble(),
           sampleRate: config.sampleRate,
-          blockSize: config.samplesPerSymbol,
+          blockSize: config.coreSymbolSamples,
         );
 
   final ModemConfig config;
+  final int _guard;
   final Goertzel _g0;
   final Goertzel _g1;
 
@@ -67,6 +69,11 @@ class Synchronizer {
     int bestStart = -1;
     double bestScore = -1;
 
+    // The alternating preamble is periodic and therefore correlates highly at
+    // offsets shifted by an even number of symbols. We must take the GLOBAL
+    // maximum (a full scan) — the true alignment always scores highest because
+    // every preamble symbol lines up — rather than exiting early on the first
+    // "good enough" (but shifted) peak.
     for (int start = searchStart; start <= lastStart; start += coarseStep) {
       final score = _preambleScore(samples, start);
       if (score > bestScore) {
@@ -112,8 +119,9 @@ class Synchronizer {
     for (int k = 0; k < config.preambleBits; k++) {
       final pos = start + k * s;
       if (pos + s > samples.length) break;
-      final e0 = _g0.energy(samples, start: pos);
-      final e1 = _g1.energy(samples, start: pos);
+      final core = pos + _guard;
+      final e0 = _g0.energy(samples, start: core);
+      final e1 = _g1.energy(samples, start: core);
       final total = e0 + e1;
       if (total <= 0) {
         counted++;

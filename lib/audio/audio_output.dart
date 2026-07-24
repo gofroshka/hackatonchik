@@ -6,7 +6,12 @@ import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 /// Plays 16-bit signed PCM through the device speaker using a feed-callback
 /// driven queue so large buffers stream smoothly without gaps.
 class AudioOutput {
-  AudioOutput({this.feedThreshold = 8000});
+  AudioOutput({this.feedThreshold = 16000});
+
+  /// Number of frames pushed per feed. A large cushion (~0.5 s at 48 kHz)
+  /// prevents speaker buffer underruns, which are audible as crackling and also
+  /// corrupt the transmitted signal.
+  static const int _chunkFrames = 24000;
 
   /// When the plugin's internal queue falls below this many frames the feed
   /// callback fires so we can push more data.
@@ -63,8 +68,7 @@ class AudioOutput {
       }
       return;
     }
-    const chunkFrames = 8000;
-    final end = (_position + chunkFrames).clamp(0, _pending.length);
+    final end = (_position + _chunkFrames).clamp(0, _pending.length);
     final slice = _pending.sublist(_position, end);
     _position = end;
     FlutterPcmSound.feed(PcmArrayInt16(bytes: slice.buffer.asByteData(

@@ -78,29 +78,34 @@ class BfskDemodulator {
   BfskDemodulator(this.config)
       : _repetition = RepetitionCode(config.repetitionFactor),
         _sync = Synchronizer(config),
+        _guard = config.symbolGuardSamples,
         _g0 = Goertzel(
           targetFrequency: config.freq0.toDouble(),
           sampleRate: config.sampleRate,
-          blockSize: config.samplesPerSymbol,
+          blockSize: config.coreSymbolSamples,
         ),
         _g1 = Goertzel(
           targetFrequency: config.freq1.toDouble(),
           sampleRate: config.sampleRate,
-          blockSize: config.samplesPerSymbol,
+          blockSize: config.coreSymbolSamples,
         );
 
   final ModemConfig config;
   final RepetitionCode _repetition;
   final Synchronizer _sync;
+  final int _guard;
   final Goertzel _g0;
   final Goertzel _g1;
 
   static const PacketDecoder _packetDecoder = PacketDecoder();
 
-  /// Demodulates a single symbol located at [start].
+  /// Demodulates a single symbol whose boundary starts at [start]. Only the
+  /// steady-frequency core of the symbol (excluding the transition edges) is
+  /// integrated so the smoothed boundaries do not blur the decision.
   SymbolResult demodulateSymbol(Float64List samples, int start) {
-    final e0 = _g0.energy(samples, start: start);
-    final e1 = _g1.energy(samples, start: start);
+    final core = start + _guard;
+    final e0 = _g0.energy(samples, start: core);
+    final e1 = _g1.energy(samples, start: core);
     final total = e0 + e1;
     final bit = e1 > e0 ? 1 : 0;
     final confidence = total > 0 ? (e1 - e0).abs() / total : 0.0;
@@ -134,62 +139,67 @@ class BfskDemodulator {
       );
     }
 
-    // Establish a presence threshold from the preamble's own energy so the
-    // decoder adapts to the current playback volume.
-    double preambleEnergy = 0;
-    int preambleSymbols = 0;
-    for (int k = 0; k < config.preambleBits; k++) {
-      final pos = preamble.startSample + k * s;
-      if (pos + s > samples.length) break;
-      final e0 = _g0.energy(samples, start: pos);
-      final e1 = _g1.energy(samples, start: pos);
-      preambleEnergy += e0 + e1;
-      preambleSymbols++;
-    }
-    final avgPreambleEnergy =
-        preambleSymbols > 0 ? preambleEnergy / preambleSymbols : 0.0;
-    final presenceThreshold = avgPreambleEnergy * 0.12;
-
+    final rep = config.repetitionFactor;
     final dataStart = preamble.startSample + config.preambleBits * s;
+    final availableSymbols = (samples.length - dataStart) ~/ s;
 
-    final bits = <int>[];
-    final confidences = <double>[];
-    double lastE0 = 0;
-    double lastE1 = 0;
-    double confidenceSum = 0;
-    int silenceRun = 0;
-    int pos = dataStart;
-    while (pos + s <= samples.length) {
-      final sym = demodulateSymbol(samples, pos);
-      final total = sym.energy0 + sym.energy1;
-      if (total < presenceThreshold) {
-        silenceRun++;
-        // Two consecutive silent symbols mark the end of the burst.
-        if (silenceRun >= 2) break;
-      } else {
-        silenceRun = 0;
-      }
-      bits.add(sym.bit);
-      confidences.add(sym.confidence);
-      confidenceSum += sym.confidence;
-      lastE0 = sym.energy0;
-      lastE1 = sym.energy1;
-      pos += s;
+    // Number of coded symbols the fixed header (sync+ver+type+seq+len = 7 bytes)
+    // occupies. This tells us how much to read before we know the full length.
+    const headerBytes = 2 + 5;
+    final headerSymbols = headerBytes * 8 * rep;
+
+    if (availableSymbols < headerSymbols) {
+      return _incompleteResult(preamble, samples.length);
     }
 
-    final consumedUntil = pos;
+    // Read just the header to discover the payload length.
+    final head = _demod(samples, dataStart, headerSymbols);
+    final headerDecoded = _repetition.decodeSoft(head.bits, head.confs);
+    final headerBytesOut = BitUtils.bitsToBytes(headerDecoded.bits);
+    final syncOk = headerBytesOut.length >= 2 &&
+        ((headerBytesOut[0] << 8) | headerBytesOut[1]) == ModemConfig.syncWord;
+    final length = headerBytesOut.length >= 7
+        ? ((headerBytesOut[5] << 8) | headerBytesOut[6])
+        : 0xFFFF;
 
-    final decoded = _repetition.decodeSoft(bits, confidences);
+    // Misaligned preamble or garbage header: skip past it and keep searching.
+    if (!syncOk || length > config.maxPayloadLength) {
+      return FrameDecodeResult(
+        status: PacketDecodeStatus.crcError,
+        diagnostics: DemodDiagnostics(
+          offset: preamble.startSample,
+          preambleScore: preamble.score,
+          bitCount: headerDecoded.bits.length,
+        ),
+        consumedUntil: dataStart + headerSymbols * s,
+      );
+    }
+
+    final totalBytes = 2 + 5 + length + 2;
+    final totalSymbols = totalBytes * 8 * rep;
+
+    // Length-aware: read exactly the whole frame, tolerating any momentary
+    // energy dips in the middle (from clicks, AGC or noise suppression) instead
+    // of stopping at the first quiet symbol.
+    if (availableSymbols < totalSymbols) {
+      return _incompleteResult(preamble, samples.length);
+    }
+
+    final frame = _demod(samples, dataStart, totalSymbols);
+    final decoded = _repetition.decodeSoft(frame.bits, frame.confs);
     final bytes = BitUtils.bitsToBytes(decoded.bits);
     final packetResult = _packetDecoder.decode(bytes);
 
-    final avgConfidence = bits.isEmpty ? 0.0 : confidenceSum / bits.length;
-    final noiseFloor = presenceThreshold;
-    final snr = noiseFloor > 0 ? (lastE0 + lastE1) / noiseFloor : 0.0;
+    final consumedUntil = dataStart + totalSymbols * s;
+    final avgConfidence =
+        frame.bits.isEmpty ? 0.0 : frame.confSum / frame.bits.length;
+    final noiseFloor = _preambleNoiseFloor(samples, preamble.startSample);
+    final signalEnergy = frame.lastE0 + frame.lastE1;
+    final snr = noiseFloor > 0 ? signalEnergy / noiseFloor : 0.0;
 
     final diagnostics = DemodDiagnostics(
-      energy0: lastE0,
-      energy1: lastE1,
+      energy0: frame.lastE0,
+      energy1: frame.lastE1,
       noiseFloor: noiseFloor,
       snr: snr,
       confidence: avgConfidence,
@@ -206,6 +216,68 @@ class BfskDemodulator {
       packetResult: packetResult,
       diagnostics: diagnostics,
       consumedUntil: consumedUntil,
+    );
+  }
+
+  /// Demodulates [count] symbols starting at [dataStart], returning the hard
+  /// bits, per-symbol confidences and energy statistics.
+  ({
+    List<int> bits,
+    List<double> confs,
+    double lastE0,
+    double lastE1,
+    double confSum,
+  }) _demod(Float64List samples, int dataStart, int count) {
+    final s = config.samplesPerSymbol;
+    final bits = <int>[];
+    final confs = <double>[];
+    double lastE0 = 0;
+    double lastE1 = 0;
+    double confSum = 0;
+    for (int i = 0; i < count; i++) {
+      final pos = dataStart + i * s;
+      if (pos + s > samples.length) break;
+      final sym = demodulateSymbol(samples, pos);
+      bits.add(sym.bit);
+      confs.add(sym.confidence);
+      confSum += sym.confidence;
+      lastE0 = sym.energy0;
+      lastE1 = sym.energy1;
+    }
+    return (
+      bits: bits,
+      confs: confs,
+      lastE0: lastE0,
+      lastE1: lastE1,
+      confSum: confSum,
+    );
+  }
+
+  double _preambleNoiseFloor(Float64List samples, int start) {
+    final s = config.samplesPerSymbol;
+    double energy = 0;
+    int n = 0;
+    for (int k = 0; k < config.preambleBits; k++) {
+      final pos = start + k * s;
+      if (pos + s > samples.length) break;
+      final sym = demodulateSymbol(samples, pos);
+      energy += sym.energy0 + sym.energy1;
+      n++;
+    }
+    return n > 0 ? (energy / n) * 0.12 : 0.0;
+  }
+
+  FrameDecodeResult _incompleteResult(
+    PreambleSearchResult preamble,
+    int samplesLength,
+  ) {
+    return FrameDecodeResult(
+      status: PacketDecodeStatus.needMoreData,
+      diagnostics: DemodDiagnostics(
+        offset: preamble.startSample,
+        preambleScore: preamble.score,
+      ),
+      consumedUntil: samplesLength,
     );
   }
 }

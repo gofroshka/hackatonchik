@@ -28,6 +28,9 @@ class ReceiveController extends ChangeNotifier {
   StreamSubscription<Float64List>? _audioSub;
   StreamSubscription<DecoderEvent>? _eventSub;
 
+  int _activeRate = 48000;
+  bool _rebuilding = false;
+
   bool _isReceiving = false;
   bool get isReceiving => _isReceiving;
 
@@ -86,11 +89,13 @@ class ReceiveController extends ChangeNotifier {
     }
 
     try {
-      _worker = DecoderWorker();
-      await _worker!.start(config);
-      _eventSub = _worker!.events.listen(_onEvent);
+      _activeRate = config.sampleRate;
+      await _startWorker(_activeRate);
 
-      final stream = await _input.start(sampleRate: config.sampleRate);
+      final stream = await _input.start(
+        sampleRate: config.sampleRate,
+        onSampleRateChanged: _handleRateChange,
+      );
       _audioSub = stream.listen(
         (chunk) => _worker?.addSamples(chunk),
         onError: (Object e) {
@@ -103,7 +108,7 @@ class ReceiveController extends ChangeNotifier {
       );
 
       _isReceiving = true;
-      _micStatus = 'Слушаю (${config.sampleRate} Гц)';
+      _micStatus = 'Слушаю ($_activeRate Гц)';
       _lastMessageStart = DateTime.now();
       notifyListeners();
     } on AudioInputException catch (e) {
@@ -119,10 +124,58 @@ class ReceiveController extends ChangeNotifier {
     }
   }
 
+  Future<void> _startWorker(int rate) async {
+    _worker = DecoderWorker();
+    await _worker!.start(config.copyWith(sampleRate: rate));
+    _eventSub = _worker!.events.listen(_onEvent);
+  }
+
+  /// Rebuilds the decoder if the platform reports a different actual capture
+  /// rate than the one we requested (some devices force 44.1/48 kHz).
+  Future<void> _handleRateChange(int rate) async {
+    if (rate == _activeRate || _rebuilding || !_isReceiving) return;
+    _rebuilding = true;
+    _activeRate = rate;
+    _micStatus = 'Слушаю ($rate Гц, адаптировано)';
+    notifyListeners();
+    try {
+      await _eventSub?.cancel();
+      _eventSub = null;
+      await _worker?.dispose();
+      _worker = null;
+      await _startWorker(rate);
+    } finally {
+      _rebuilding = false;
+    }
+  }
+
   void _onEvent(DecoderEvent event) {
     _decoderState = event.state;
     _inputLevel = event.inputLevel;
-    _diagnostics = event.diagnostics;
+
+    // Level "ticks" carry only noise-floor/SNR and zeroed decode fields. Keep
+    // the last real decode values sticky so the diagnostics screen stays
+    // meaningful instead of flashing back to zero between transmissions.
+    final d = event.diagnostics;
+    final isRealDecode =
+        d.offset >= 0 || d.bitCount > 0 || d.energy0 > 0 || d.energy1 > 0;
+    if (isRealDecode) {
+      _diagnostics = d;
+    } else {
+      _diagnostics = DemodDiagnostics(
+        energy0: _diagnostics.energy0,
+        energy1: _diagnostics.energy1,
+        noiseFloor: d.noiseFloor,
+        snr: d.snr,
+        confidence: _diagnostics.confidence,
+        offset: _diagnostics.offset,
+        bitCount: _diagnostics.bitCount,
+        packetCount: _diagnostics.packetCount,
+        correctedBits: _diagnostics.correctedBits,
+        preambleScore: _diagnostics.preambleScore,
+        crcOk: _diagnostics.crcOk,
+      );
+    }
 
     _pushEnergy(event.inputLevel);
 

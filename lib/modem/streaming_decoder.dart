@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../protocol/message_assembler.dart';
 import '../protocol/packet_decoder.dart';
 import 'bfsk_demodulator.dart';
+import 'biquad.dart';
 import 'modem_config.dart';
 import 'ring_buffer.dart';
 import 'signal_detector.dart';
@@ -52,14 +53,22 @@ class StreamingDecoder {
       : config = config ?? const ModemConfig() {
     _demodulator = BfskDemodulator(this.config);
     _detector = SignalDetector(snrThreshold: this.config.snrThreshold);
-    // Hold up to ~8 seconds of audio.
-    _buffer = RingBuffer(this.config.sampleRate * 8);
+    _filter = BandpassFilter(
+      lowCutoff: this.config.bandpassLow,
+      highCutoff: this.config.bandpassHigh,
+      sampleRate: this.config.sampleRate,
+    );
+    // A single message can take many seconds at 20 ms/symbol with repetition
+    // coding, so the buffer must comfortably hold a whole transmission plus its
+    // surrounding silence.
+    _buffer = RingBuffer(this.config.sampleRate * 45);
     _assembler = MessageAssembler();
   }
 
   final ModemConfig config;
   late final BfskDemodulator _demodulator;
   late final SignalDetector _detector;
+  late final BandpassFilter _filter;
   late final RingBuffer _buffer;
   late final MessageAssembler _assembler;
 
@@ -70,9 +79,13 @@ class StreamingDecoder {
   DecoderState get state => _state;
 
   /// Feeds a chunk of normalized samples and returns any events produced.
-  List<DecoderEvent> addSamples(Float64List chunk) {
+  List<DecoderEvent> addSamples(Float64List rawChunk) {
     final events = <DecoderEvent>[];
-    if (chunk.isEmpty) return events;
+    if (rawChunk.isEmpty) return events;
+
+    // Band-pass the input to the BFSK band so room rumble and hiss don't
+    // dominate detection — crucial for quiet/low-volume sources.
+    final chunk = _filter.process(rawChunk);
 
     final present = _detector.update(chunk);
     final level = _detector.lastRms.clamp(0.0, 1.0);
@@ -86,10 +99,17 @@ class StreamingDecoder {
         _state = DecoderState.signalDetected;
         events.add(_event(level: level));
       }
+      // Safety net: only if the buffer is about to run out of room do we force a
+      // decode attempt, so we never overwrite an in-progress transmission.
+      if (_buffer.length > _buffer.capacity - config.sampleRate) {
+        events.addAll(_decodeCaptured(level));
+        _capturing = false;
+        _silenceCounter = 0;
+      }
     } else if (_capturing) {
       _silenceCounter += chunk.length;
-      // After ~250 ms of silence, assume the burst is complete and decode.
-      if (_silenceCounter > config.sampleRate ~/ 4) {
+      // After ~200 ms of silence, assume the burst is complete and decode.
+      if (_silenceCounter > config.sampleRate ~/ 5) {
         events.addAll(_decodeCaptured(level));
         _capturing = false;
         _silenceCounter = 0;
@@ -134,8 +154,11 @@ class StreamingDecoder {
     int guard = 0;
 
     while (searchStart + config.preambleBits * s < samples.length) {
-      final frame =
-          _demodulator.decodeFrame(samples, searchStart: searchStart);
+      final frame = _demodulator.decodeFrame(
+        samples,
+        searchStart: searchStart,
+        minPreambleScore: 0.25,
+      );
       lastDiag = frame.diagnostics;
 
       if (frame.status == PacketDecodeStatus.noSync) break;
@@ -200,6 +223,7 @@ class StreamingDecoder {
     _buffer.clear();
     _assembler.reset();
     _detector.reset();
+    _filter.reset();
     _capturing = false;
     _silenceCounter = 0;
     _state = DecoderState.idle;

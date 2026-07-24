@@ -45,7 +45,7 @@ class AudioInput {
   /// failure with a user-friendly reason.
   Future<Stream<Float64List>> start({
     required int sampleRate,
-    void Function(RecordConfig actual)? onConfigChanged,
+    void Function(int actualSampleRate)? onSampleRateChanged,
   }) async {
     final allowed = await hasPermission();
     if (!allowed) {
@@ -58,24 +58,43 @@ class AudioInput {
     final controller = StreamController<Float64List>();
 
     await _recorder.setOnConfigChanged((config) {
-      onConfigChanged?.call(config);
+      onSampleRateChanged?.call(config.sampleRate);
     });
 
-    late final Stream<Uint8List> raw;
-    try {
-      raw = await _recorder.startStream(
-        RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: sampleRate,
-          numChannels: 1,
-          autoGain: false,
-          echoCancel: false,
-          noiseSuppress: false,
-        ),
-      );
-    } catch (e) {
+    Stream<Uint8List>? raw;
+    // Try progressively more permissive audio sources. `unprocessed` gives raw
+    // mic samples with NO device-side AGC/echo-cancel/noise-suppression, which
+    // is essential so the phone's DSP does not mangle the BFSK tones. If a
+    // device does not support it we fall back to `mic`, then the default.
+    for (final source in const [
+      AndroidAudioSource.unprocessed,
+      AndroidAudioSource.mic,
+      AndroidAudioSource.defaultSource,
+    ]) {
+      try {
+        raw = await _recorder.startStream(
+          RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            sampleRate: sampleRate,
+            numChannels: 1,
+            autoGain: false,
+            echoCancel: false,
+            noiseSuppress: false,
+            androidConfig: AndroidRecordConfig(
+              audioSource: source,
+              audioManagerMode: AudioManagerMode.modeNormal,
+            ),
+          ),
+        );
+        break;
+      } catch (_) {
+        // Try the next source.
+      }
+    }
+
+    if (raw == null) {
       await controller.close();
-      throw AudioInputException(
+      throw const AudioInputException(
         AudioInputError.deviceUnavailable,
         'Не удалось запустить запись: микрофон занят или недоступен.',
       );

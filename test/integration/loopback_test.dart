@@ -84,8 +84,10 @@ void main() {
     });
 
     test('long multi-packet message is split and reassembled', () {
+      // Two packets is enough to exercise fragmentation/reassembly; at 40 ms
+      // per symbol a much longer message would make the loopback test very slow.
       final message =
-          List.generate(500, (i) => String.fromCharCode(65 + (i % 26))).join();
+          List.generate(180, (i) => String.fromCharCode(65 + (i % 26))).join();
       expect(decodeFloat(encodeToFloat(message)), message);
     });
   });
@@ -120,13 +122,16 @@ void main() {
   });
 
   group('Corruption', () {
-    test('a wrecked payload region does not yield the original message', () {
+    test('a wrecked payload region is rejected by CRC', () {
       const message = 'HELLO FROM AUDIO';
       final samples = encodeToFloat(message);
       final rng = Random(1);
-      // Corrupt the middle heavily (well past the preamble).
-      for (int i = samples.length ~/ 2; i < samples.length ~/ 2 + 2000; i++) {
-        samples[i] = (rng.nextDouble() * 2 - 1);
+      // Wreck a large contiguous region of the packet — far more than the
+      // repetition code can repair — so the CRC must reject it.
+      final start = (samples.length * 0.4).round();
+      final end = (samples.length * 0.7).round();
+      for (int i = start; i < end; i++) {
+        samples[i] = rng.nextDouble() * 2 - 1;
       }
       expect(decodeFloat(samples), isNot(message));
     });

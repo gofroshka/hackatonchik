@@ -47,47 +47,72 @@ class BfskModulator {
   }
 
   /// Modulates an arbitrary [bits] stream into PCM, including silence padding.
+  ///
+  /// Uses continuous-phase FSK with a raised-cosine frequency transition at each
+  /// symbol boundary (GFSK-style). Because both the phase AND the instantaneous
+  /// frequency are continuous, the waveform has no slope discontinuities and
+  /// therefore produces no broadband clicks — which also prevents the receiving
+  /// phone's noise suppressor from chewing up the signal.
   Int16List modulateBits(List<int> bits) {
-    final samplesPerSymbol = config.samplesPerSymbol;
+    final s = config.samplesPerSymbol;
     final leadingSilence =
         (config.sampleRate * config.leadingSilenceMs / 1000).round();
     final trailingSilence =
         (config.sampleRate * config.trailingSilenceMs / 1000).round();
 
-    final toneSamples = bits.length * samplesPerSymbol;
+    final toneSamples = bits.length * s;
     final total = leadingSilence + toneSamples + trailingSilence;
     final out = Int16List(total);
 
+    final scale = config.amplitude * 32767.0;
+    final half = config.transitionSamples ~/ 2;
+
+    double freqOfSymbol(int k) => bits[k] == 1
+        ? config.freq1.toDouble()
+        : config.freq0.toDouble();
+
     double phase = 0;
     int writeIndex = leadingSilence;
-    final scale = config.amplitude * 32767.0;
 
-    for (int b = 0; b < bits.length; b++) {
-      final freq = bits[b] == 1 ? config.freq1 : config.freq0;
-      final phaseStep = 2 * math.pi * freq / config.sampleRate;
-      for (int i = 0; i < samplesPerSymbol; i++) {
-        double envelope = 1.0;
-        // Apply a raised-cosine ramp only at the very beginning and end of the
-        // whole tone burst to avoid clicks while keeping symbols phase-locked.
-        final globalIndex = b * samplesPerSymbol + i;
-        if (globalIndex < config.rampSamples) {
-          envelope = 0.5 *
-              (1 - math.cos(math.pi * globalIndex / config.rampSamples));
-        } else if (globalIndex >= toneSamples - config.rampSamples) {
-          final tail = toneSamples - globalIndex;
-          envelope =
-              0.5 * (1 - math.cos(math.pi * tail / config.rampSamples));
+    for (int j = 0; j < toneSamples; j++) {
+      final k = j ~/ s;
+      final p = j % s;
+      final fk = freqOfSymbol(k);
+
+      // Determine the instantaneous frequency, smoothing across boundaries.
+      double freq = fk;
+      if (half > 0) {
+        if (p < half && k > 0) {
+          // Second half of the transition from the previous symbol.
+          final fPrev = freqOfSymbol(k - 1);
+          final u = (half + p) / (2 * half); // 0.5 -> 1.0
+          final w = 0.5 * (1 - math.cos(math.pi * u));
+          freq = fPrev + (fk - fPrev) * w;
+        } else if (p >= s - half && k < bits.length - 1) {
+          // First half of the transition towards the next symbol.
+          final fNext = freqOfSymbol(k + 1);
+          final u = (p - (s - half)) / (2 * half); // 0.0 -> ~0.5
+          final w = 0.5 * (1 - math.cos(math.pi * u));
+          freq = fk + (fNext - fk) * w;
         }
-
-        double sample = math.sin(phase) * envelope * scale;
-        // Guard against any accidental clipping.
-        if (sample > 32767) sample = 32767;
-        if (sample < -32768) sample = -32768;
-        out[writeIndex++] = sample.round();
-
-        phase += phaseStep;
-        if (phase > 2 * math.pi) phase -= 2 * math.pi;
       }
+
+      // Raised-cosine amplitude ramp only at the very start/end of the burst.
+      double envelope = 1.0;
+      if (j < config.rampSamples) {
+        envelope = 0.5 * (1 - math.cos(math.pi * j / config.rampSamples));
+      } else if (j >= toneSamples - config.rampSamples) {
+        final tail = toneSamples - j;
+        envelope = 0.5 * (1 - math.cos(math.pi * tail / config.rampSamples));
+      }
+
+      double sample = math.sin(phase) * envelope * scale;
+      if (sample > 32767) sample = 32767;
+      if (sample < -32768) sample = -32768;
+      out[writeIndex++] = sample.round();
+
+      phase += 2 * math.pi * freq / config.sampleRate;
+      if (phase > 2 * math.pi) phase -= 2 * math.pi;
     }
 
     return out;

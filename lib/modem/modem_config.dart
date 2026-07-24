@@ -8,13 +8,19 @@ import 'dart:math' as math;
 /// phones.
 class ModemConfig {
   const ModemConfig({
-    this.sampleRate = 24000,
+    // 48 kHz is the native capture/playback rate on virtually all Android and
+    // iOS devices, so requesting it avoids silent resampling that would desync
+    // the demodulator. The physical BFSK frequencies are independent of it.
+    this.sampleRate = 48000,
     this.freq0 = 1500,
     this.freq1 = 2500,
-    this.symbolDurationMs = 20,
-    this.amplitude = 0.65,
+    this.symbolDurationMs = 40,
+    this.amplitude = 0.7,
     this.preambleBits = 64,
     this.repetitionFactor = 3,
+    this.frequencyTransitionMs = 3.0,
+    this.bandpassLow = 1100,
+    this.bandpassHigh = 2900,
     this.leadingSilenceMs = 120,
     this.trailingSilenceMs = 120,
     this.rampSamples = 24,
@@ -36,6 +42,11 @@ class ModemConfig {
   /// Duration of a single BFSK symbol (one bit) in milliseconds.
   final int symbolDurationMs;
 
+  /// Duration (ms) of the smooth raised-cosine frequency transition applied at
+  /// each symbol boundary. This keeps the instantaneous frequency continuous
+  /// (GFSK-style) so there are no broadband clicks between bits.
+  final double frequencyTransitionMs;
+
   /// Output amplitude in range 0.0 .. 1.0. Kept below 1.0 to avoid clipping.
   final double amplitude;
 
@@ -46,6 +57,12 @@ class ModemConfig {
   /// Repetition code factor. Each payload bit is transmitted this many times
   /// and recovered on the receiver with majority voting.
   final int repetitionFactor;
+
+  /// Lower cutoff (Hz) of the receive band-pass filter.
+  final double bandpassLow;
+
+  /// Upper cutoff (Hz) of the receive band-pass filter.
+  final double bandpassHigh;
 
   /// Silence padding before the preamble in milliseconds.
   final int leadingSilenceMs;
@@ -72,6 +89,24 @@ class ModemConfig {
   /// Number of PCM samples that make up one symbol.
   int get samplesPerSymbol =>
       (sampleRate * symbolDurationMs / 1000).round();
+
+  /// Total width (samples) of the frequency transition centered on each symbol
+  /// boundary. Always even so it splits cleanly across the boundary.
+  int get transitionSamples {
+    final raw = (sampleRate * frequencyTransitionMs / 1000).round();
+    return raw.isOdd ? raw + 1 : raw;
+  }
+
+  /// Samples skipped at each symbol edge during demodulation so the Goertzel
+  /// integrates only the clean, steady-frequency core of the symbol.
+  int get symbolGuardSamples => transitionSamples ~/ 2;
+
+  /// Number of steady-state samples in the middle of a symbol used for
+  /// Goertzel energy estimation.
+  int get coreSymbolSamples {
+    final core = samplesPerSymbol - 2 * symbolGuardSamples;
+    return core < 1 ? samplesPerSymbol : core;
+  }
 
   /// Sync word marking the start of a packet (after the preamble).
   static const int syncWord = 0xDDAA;
