@@ -57,6 +57,11 @@ impl OfdmModulation {
 
     /// Differential PSK order used by the body: DBPSK for the reliable default,
     /// DQPSK for the faster mode.
+    ///
+    /// A hardware sweep on MacBook speakers (differential BPSK/QPSK at repetition
+    /// 2/3/4) showed the speaker/microphone response has scattered deep notches
+    /// (~30% of carriers dead at varying frequencies), so only 4x frequency
+    /// diversity decodes reliably; lower diversity or QPSK fails.
     const fn bits_per_carrier(self) -> usize {
         match self {
             Self::Qpsk => 1,
@@ -64,9 +69,9 @@ impl OfdmModulation {
         }
     }
 
-    /// How many carriers carry each coded cell. The reliable default repeats
-    /// every cell on four carriers spread across the band (stride = cells), so a
-    /// localized notch cannot hit every copy.
+    /// How many carriers carry each coded cell (frequency diversity). Repeating a
+    /// cell on four carriers spread across the band means a localized notch
+    /// cannot hit every copy.
     const fn repetition(self) -> usize {
         match self {
             Self::Qpsk => 4,
@@ -433,6 +438,52 @@ pub fn decode_all_ofdm(samples: &[f32], profile: OfdmProfile) -> Vec<Vec<u8>> {
 pub struct OfdmFrameProbe {
     pub payload_len: usize,
     pub body_bits: Vec<bool>,
+}
+
+/// Mean per-data-carrier differential magnitude (channel strength) of the first
+/// detected frame. Reveals notches in the speaker/microphone response. Diagnostic.
+pub fn ofdm_channel_profile(samples: &[f32], profile: OfdmProfile) -> Option<Vec<f32>> {
+    let mut decoder = OfdmDecoder::new(profile);
+    decoder.push(samples);
+    let frame_start = loop {
+        let start = decoder.find_preamble()?;
+        if decoder.buffer.len() < frame_start_needed(start) {
+            return None;
+        }
+        if decoder.decode_header(start).is_some() {
+            break start;
+        }
+        decoder.scan_pos = start + OFDM_SYMBOL_SAMPLES;
+    };
+    let symbols = 16.min(
+        (decoder.buffer.len() - frame_start - FIXED_SYMBOLS * OFDM_SYMBOL_SAMPLES)
+            / OFDM_SYMBOL_SAMPLES,
+    );
+    let mut mag = vec![0.0f32; DATA_CARRIERS];
+    let mut previous =
+        decoder.active_spectrum(frame_start + (FIXED_SYMBOLS - 1) * OFDM_SYMBOL_SAMPLES)?;
+    for symbol in 0..symbols {
+        let current = decoder
+            .active_spectrum(frame_start + (FIXED_SYMBOLS + symbol) * OFDM_SYMBOL_SAMPLES)?;
+        let mut carrier = 0usize;
+        for (active_index, (cur, prev)) in current.iter().zip(&previous).enumerate() {
+            if is_pilot(active_index) {
+                continue;
+            }
+            mag[carrier] += (cur * prev.conj()).norm();
+            carrier += 1;
+        }
+        previous = current;
+    }
+    let scale = symbols.max(1) as f32;
+    for value in mag.iter_mut() {
+        *value /= scale;
+    }
+    Some(mag)
+}
+
+fn frame_start_needed(start: usize) -> usize {
+    start + FIXED_SYMBOLS * OFDM_SYMBOL_SAMPLES
 }
 
 /// Exact body bits that `encode_ofdm` transmits for a payload. Diagnostic.

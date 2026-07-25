@@ -87,23 +87,49 @@ What made OFDM work over the real acoustic path:
 - differential DBPSK across time, which cancels the static channel phase, a
   fixed sample-timing offset and constant carrier rotation without a coherent
   channel estimate;
+- a differential, rep-4, time-redundant header (no fragile coherent header), so
+  frames are detected reliably;
 - a 384-sample cyclic prefix with a centred FFT window to absorb speaker/room
   delay spread;
-- carrier-major interleaving with rep-2 frequency diversity, so a notch in the
-  handset response (a handful of dead subcarriers) cannot corrupt the payload.
+- carrier-major interleaving with 4x frequency diversity, so a notch in the
+  handset response cannot hit every copy of a bit.
 
-Ground-truth measurement (`ofdm-probe`): full-rate DBPSK saw ~2-5% raw bit error
-concentrated on a few notch subcarriers; rep-2 diversity dropped this below 0.5%
-and every recorded frame decoded. The `--qam16` fast mode has no diversity and
-still needs a clean channel; the safe default is the accepted physical result.
+## Speed vs reliability sweep (why rep-4)
 
-Reproduce the ground-truth BER probe:
+A hardware sweep (`ofdm-probe`, `OFDM_VARIANT`, 200-byte frames, 5 per run at
+65% volume) measured how many frames fully decode per variant:
+
+| variant | rel. speed | recovered / 5 |
+| --- | ---: | ---: |
+| DQPSK rep-2 (`dqpsk2`) | 4x | 0 |
+| DQPSK rep-3 (`dqpsk3`) | 2.6x | 0 |
+| DQPSK rep-4 (`dqpsk4`) | 2x | 2 |
+| DBPSK rep-2 (`dbpsk2`) | 2x | 1 |
+| DBPSK rep-3 (`dbpsk3`) | 1.3x | 3 |
+| DBPSK rep-4 (default) | 1x | 3-5 |
+
+The `ofdm-probe profile` command dumps the per-carrier channel magnitude. On the
+MacBook Air speaker the response has **scattered deep notches — about 30% of the
+carriers are effectively dead**, at frequencies that change if the band is
+shifted (`OFDM_BAND`). Because the notches are wide and move, only 4x frequency
+diversity keeps enough good copies of every bit; anything faster (less diversity
+or the tighter QPSK decision regions) drops below the outer-FEC threshold and
+transfers fail. Shrinking the cyclic prefix (192/128) or shifting the band did
+not give a robust, device-agnostic speedup.
+
+Conclusion: **rep-4 differential DBPSK is the fastest variant that transfers
+reliably over the built-in laptop speaker.** Going faster needs a device-specific
+carrier mask (a fixed notch profile per model) or an acoustic ACK/ARQ channel,
+neither of which is device-agnostic.
+
+Reproduce the ground-truth probe and channel profile:
 
 ```bash
 # terminal 1
-cargo run -p sonic-share-cli --bin record -- capture.wav 12
-# terminal 2 (within the 12 s window)
+cargo run -p sonic-share-cli --bin record -- capture.wav 24
+# terminal 2 (within the window)
 cargo run -p sonic-share-cli --bin ofdm-probe -- send
 # then
 cargo run -p sonic-share-cli --bin ofdm-probe -- check capture.wav
+cargo run -p sonic-share-cli --bin ofdm-probe -- profile capture.wav
 ```

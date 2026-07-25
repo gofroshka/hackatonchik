@@ -6,11 +6,12 @@
 
 use sonic_share_cli::audio;
 use sonic_share_core::{
-    decode_all_ofdm, encode_ofdm, ofdm_expected_body_bits, ofdm_probe_frames, OfdmProfile,
-    ENCODE_SR,
+    decode_all_ofdm, encode_ofdm, ofdm_channel_profile, ofdm_expected_body_bits, ofdm_probe_frames,
+    OfdmProfile, ENCODE_SR,
 };
 
 const PAYLOAD_LEN: usize = 200;
+const PACKET_COUNT: usize = 5;
 
 fn known_payload() -> Vec<u8> {
     (0..PAYLOAD_LEN).map(|i| (i * 37 + 11) as u8).collect()
@@ -37,6 +38,14 @@ fn main() {
                 .expect("check requires a WAV path");
             check(path, profile);
         }
+        Some("profile") => {
+            let path = args
+                .iter()
+                .skip(1)
+                .find(|a| !a.starts_with("--"))
+                .expect("profile requires a WAV path");
+            channel_profile(path, profile);
+        }
         _ => {
             eprintln!("usage: ofdm-probe send|check <wav> [--qam16]");
             std::process::exit(2);
@@ -47,16 +56,17 @@ fn main() {
 fn send(profile: OfdmProfile) {
     let payload = known_payload();
     let one = encode_ofdm(&payload, profile);
-    let gap = vec![0.0f32; ENCODE_SR as usize / 2];
+    let gap = vec![0.0f32; ENCODE_SR as usize * 2 / 5];
     let mut wave = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..PACKET_COUNT {
         wave.extend_from_slice(&gap);
         wave.extend_from_slice(&one);
     }
     wave.extend_from_slice(&gap);
     println!(
-        "playing 3x known {PAYLOAD_LEN}-byte OFDM packets ({:?})",
-        profile.modulation()
+        "playing {PACKET_COUNT}x known {PAYLOAD_LEN}-byte OFDM packets ({:?}, {:.1}s)",
+        profile.modulation(),
+        wave.len() as f32 / ENCODE_SR as f32
     );
     audio::play_samples(&wave).unwrap_or_else(|error| {
         eprintln!("playback failed: {error}");
@@ -114,12 +124,43 @@ fn check(path: &str, profile: OfdmProfile) {
         );
     }
 
-    // The real metric: does RS + erasure fully recover the payload?
+    // The real metric: how many of the sent packets fully recover?
     let recovered = decode_all_ofdm(&wav.samples, profile)
         .iter()
         .filter(|p| p.as_slice() == payload.as_slice())
         .count();
-    println!("full decode: {recovered} frame(s) recovered the exact payload");
+    println!("SWEEP recovered={recovered}/{PACKET_COUNT}");
+}
+
+fn channel_profile(path: &str, profile: OfdmProfile) {
+    let wav = sonic_share_cli::wav::read_mono(std::path::Path::new(path)).unwrap_or_else(|error| {
+        eprintln!("cannot read '{path}': {error}");
+        std::process::exit(2);
+    });
+    let Some(mag) = ofdm_channel_profile(&wav.samples, profile) else {
+        println!("no frame detected");
+        return;
+    };
+    let max = mag.iter().cloned().fold(0.0f32, f32::max).max(1e-9);
+    let median = {
+        let mut s = mag.clone();
+        s.sort_by(f32::total_cmp);
+        s[s.len() / 2]
+    };
+    let weak = mag.iter().filter(|&&m| m < 0.4 * median).count();
+    println!(
+        "per-carrier channel magnitude ({} data carriers):",
+        mag.len()
+    );
+    for (carrier, &m) in mag.iter().enumerate() {
+        let bars = ((m / max) * 40.0) as usize;
+        let mark = if m < 0.4 * median { " <== notch" } else { "" };
+        println!("{carrier:2}: {:<40}{mark}", "#".repeat(bars));
+    }
+    println!(
+        "median={median:.3} max={max:.3} weak(<0.4*median)={weak}/{}",
+        mag.len()
+    );
 }
 
 fn ofdm_bits_per_carrier(profile: OfdmProfile) -> usize {
