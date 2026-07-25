@@ -1,6 +1,16 @@
 enum SonicMode { send, receive, chat }
 
-enum TransferPhase { idle, preparing, sending, listening, completed, error }
+enum TransferPhase {
+  idle,
+  preparing,
+  handshaking,
+  handshakeWaitAck,
+  sending,
+  listening,
+  endWaitAck,
+  completed,
+  error,
+}
 
 enum ChatMessageState { sending, sent, failed }
 

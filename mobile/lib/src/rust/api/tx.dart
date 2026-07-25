@@ -7,6 +7,17 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'types.dart';
 
+// These functions are ignored because they are not marked as `pub`: `samples_to_pcm16`
+
+Future<Uint8List> handshakeRequestPcm({required BigInt id}) =>
+    RustLib.instance.api.crateApiTxHandshakeRequestPcm(id: id);
+
+Future<Uint8List> handshakeAckPcm({required BigInt id}) =>
+    RustLib.instance.api.crateApiTxHandshakeAckPcm(id: id);
+
+Future<Uint8List> endAckPcm({required BigInt id}) =>
+    RustLib.instance.api.crateApiTxEndAckPcm(id: id);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<TxSession>>
 abstract class TxSession implements RustOpaqueInterface {
   Future<void> cancel();

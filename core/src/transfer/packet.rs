@@ -10,6 +10,9 @@ const TYPE_MANIFEST: u8 = 1;
 const TYPE_SHARD: u8 = 2;
 const TYPE_END: u8 = 3;
 const TYPE_INLINE: u8 = 4;
+pub const TYPE_HANDSHAKE_REQ: u8 = 5;
+pub const TYPE_HANDSHAKE_ACK: u8 = 6;
+pub const TYPE_END_ACK: u8 = 7;
 const COMMON_HEADER: usize = 4 + 1 + 1 + 8;
 pub(super) const MANIFEST_FIXED: usize = COMMON_HEADER + 1 + 8 + 8 + 32 + 2 + 1 + 1 + 4 + 1 + 1;
 pub(super) const INLINE_FIXED: usize = COMMON_HEADER + 1 + 8 + 8 + 32 + 1 + 1;
@@ -30,6 +33,15 @@ pub(super) enum Packet {
     Inline {
         metadata: TransferMetadata,
         encoded: Vec<u8>,
+    },
+    HandshakeReq {
+        id: u64,
+    },
+    HandshakeAck {
+        id: u64,
+    },
+    EndAck {
+        id: u64,
     },
 }
 
@@ -80,6 +92,24 @@ pub(super) fn encode_end(metadata: &TransferMetadata) -> Vec<u8> {
     let mut output = Vec::with_capacity(COMMON_HEADER + 32);
     encode_common(TYPE_END, metadata.id, &mut output);
     output.extend_from_slice(&metadata.sha256);
+    output
+}
+
+pub fn encode_handshake_req(id: u64) -> Vec<u8> {
+    let mut output = Vec::with_capacity(COMMON_HEADER);
+    encode_common(TYPE_HANDSHAKE_REQ, id, &mut output);
+    output
+}
+
+pub fn encode_handshake_ack(id: u64) -> Vec<u8> {
+    let mut output = Vec::with_capacity(COMMON_HEADER);
+    encode_common(TYPE_HANDSHAKE_ACK, id, &mut output);
+    output
+}
+
+pub fn encode_end_ack(id: u64) -> Vec<u8> {
+    let mut output = Vec::with_capacity(COMMON_HEADER);
+    encode_common(TYPE_END_ACK, id, &mut output);
     output
 }
 
@@ -177,39 +207,51 @@ pub(super) fn decode_packet(data: &[u8]) -> Result<Packet, TransferError> {
             cursor.finish()?;
             Ok(Packet::End { id, sha256 })
         }
-        TYPE_INLINE => {
-            let compression = Compression::from_byte(cursor.u8()?)?;
-            let original_size = cursor.u64()?;
-            let encoded_size = cursor.u64()?;
-            let sha256 = cursor
-                .take(32)?
-                .try_into()
-                .map_err(|_| TransferError::Malformed("bad digest"))?;
-            let name_len = cursor.u8()? as usize;
-            let content_type_len = cursor.u8()? as usize;
-            let name = std::str::from_utf8(cursor.take(name_len)?)
-                .map_err(|_| TransferError::Malformed("file name is not UTF-8"))?;
-            let content_type = std::str::from_utf8(cursor.take(content_type_len)?)
-                .map_err(|_| TransferError::Malformed("content type is not UTF-8"))?;
-            let encoded_len = usize::try_from(encoded_size)
-                .map_err(|_| TransferError::Malformed("encoded size overflow"))?;
-            let encoded = cursor.take(encoded_len)?.to_vec();
-            cursor.finish()?;
-            Ok(Packet::Inline {
-                metadata: TransferMetadata {
-                    id,
-                    name: safe_file_name(name),
-                    content_type: content_type.to_owned(),
-                    original_size,
-                    encoded_size,
-                    sha256,
-                    compression,
-                    group_count: 0,
-                },
-                encoded,
-            })
-        }
-        _ => Err(TransferError::Malformed("unknown packet type")),
+            TYPE_INLINE => {
+                let compression = Compression::from_byte(cursor.u8()?)?;
+                let original_size = cursor.u64()?;
+                let encoded_size = cursor.u64()?;
+                let sha256 = cursor
+                    .take(32)?
+                    .try_into()
+                    .map_err(|_| TransferError::Malformed("bad digest"))?;
+                let name_len = cursor.u8()? as usize;
+                let content_type_len = cursor.u8()? as usize;
+                let name = std::str::from_utf8(cursor.take(name_len)?)
+                    .map_err(|_| TransferError::Malformed("file name is not UTF-8"))?;
+                let content_type = std::str::from_utf8(cursor.take(content_type_len)?)
+                    .map_err(|_| TransferError::Malformed("content type is not UTF-8"))?;
+                let encoded_len = usize::try_from(encoded_size)
+                    .map_err(|_| TransferError::Malformed("encoded size overflow"))?;
+                let encoded = cursor.take(encoded_len)?.to_vec();
+                cursor.finish()?;
+                Ok(Packet::Inline {
+                    metadata: TransferMetadata {
+                        id,
+                        name: safe_file_name(name),
+                        content_type: content_type.to_owned(),
+                        original_size,
+                        encoded_size,
+                        sha256,
+                        compression,
+                        group_count: 0,
+                    },
+                    encoded,
+                })
+            }
+            TYPE_HANDSHAKE_REQ => {
+                cursor.finish()?;
+                Ok(Packet::HandshakeReq { id })
+            }
+            TYPE_HANDSHAKE_ACK => {
+                cursor.finish()?;
+                Ok(Packet::HandshakeAck { id })
+            }
+            TYPE_END_ACK => {
+                cursor.finish()?;
+                Ok(Packet::EndAck { id })
+            }
+            _ => Err(TransferError::Malformed("unknown packet type")),
     }
 }
 

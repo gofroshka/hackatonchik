@@ -33,6 +33,9 @@ class MobileReceiveEvent {
     this.totalGroups,
   });
 
+  static Future<MobileReceiveEvent> default_() =>
+      RustLib.instance.api.crateApiTypesMobileReceiveEventDefault();
+
   @override
   int get hashCode =>
       kind.hashCode ^

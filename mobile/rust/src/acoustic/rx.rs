@@ -1,8 +1,10 @@
 use std::path::Path;
 
+use sonic_share_core::detect_tone;
 use sonic_share_core::output::save_received;
 use sonic_share_core::transfer::{is_chat_content_type, TransferEvent, TransferReceiver};
 use sonic_share_core::Decoder;
+use sonic_share_core::{F_HANDSHAKE_REQ, F_HANDSHAKE_ACK, F_END_ACK};
 
 use super::types::MobileReceiveEvent;
 
@@ -105,8 +107,78 @@ impl RxSession {
                 }
             }
             TransferEvent::Failed { id, reason } => failed_event(id, reason),
+            TransferEvent::HandshakeRequest { id } => MobileReceiveEvent {
+                kind: "handshake_request".to_owned(),
+                id: format!("{id:016x}"),
+                name: None,
+                content_type: None,
+                path: None,
+                text: None,
+                message: None,
+                original_size: None,
+                completed_groups: None,
+                total_groups: None,
+            },
+            TransferEvent::HandshakeAck { id } => MobileReceiveEvent {
+                kind: "handshake_ack".to_owned(),
+                id: format!("{id:016x}"),
+                name: None,
+                content_type: None,
+                path: None,
+                text: None,
+                message: None,
+                original_size: None,
+                completed_groups: None,
+                total_groups: None,
+            },
+            TransferEvent::EndAck { id } => MobileReceiveEvent {
+                kind: "end_ack".to_owned(),
+                id: format!("{id:016x}"),
+                name: None,
+                content_type: None,
+                path: None,
+                text: None,
+                message: None,
+                original_size: None,
+                completed_groups: None,
+                total_groups: None,
+            },
         }
     }
+}
+
+pub fn check_pcm_for_handshake(pcm16_le: Vec<u8>, sample_rate: u32) -> Vec<MobileReceiveEvent> {
+    if pcm16_le.len() < 256 {
+        return Vec::new();
+    }
+    let samples: Vec<f32> = pcm16_le
+        .chunks_exact(2)
+        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as f32 / i16::MAX as f32)
+        .collect();
+    let threshold = 0.008;
+    let mut events = Vec::new();
+    static TONE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    if detect_tone(&samples, F_HANDSHAKE_REQ, sample_rate, threshold) {
+        let id = TONE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        events.push(MobileReceiveEvent {
+            kind: "handshake_request".to_owned(),
+            id: format!("{id:016x}"),
+            ..Default::default()
+        });
+    }
+    if detect_tone(&samples, F_HANDSHAKE_ACK, sample_rate, threshold) {
+        events.push(MobileReceiveEvent {
+            kind: "handshake_ack".to_owned(),
+            ..Default::default()
+        });
+    }
+    if detect_tone(&samples, F_END_ACK, sample_rate, threshold) {
+        events.push(MobileReceiveEvent {
+            kind: "end_ack".to_owned(),
+            ..Default::default()
+        });
+    }
+    events
 }
 
 fn failed_event(id: u64, reason: String) -> MobileReceiveEvent {

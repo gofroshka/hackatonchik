@@ -35,7 +35,10 @@ class _ChatPanelState extends State<ChatPanel> {
     final listening = controller.phase == TransferPhase.listening;
     final transmitting =
         controller.phase == TransferPhase.preparing ||
-        controller.phase == TransferPhase.sending;
+        controller.phase == TransferPhase.sending ||
+        controller.phase == TransferPhase.handshaking ||
+        controller.phase == TransferPhase.handshakeWaitAck ||
+        controller.phase == TransferPhase.endWaitAck;
     final messages = controller.chatMessages;
 
     return Column(
@@ -178,34 +181,38 @@ class _ChatChannelCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: 44,
-                height: 44,
-                child: CircularProgressIndicator(
-                  value: transmitting
-                      ? controller.progress
-                      : listening
-                      ? null
-                      : 0,
-                  strokeWidth: 3,
-                  color: color,
-                  backgroundColor: color.withValues(alpha: 0.12),
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: CircularProgressIndicator(
+                    value: transmitting
+                        ? controller.progress
+                        : listening
+                        ? null
+                        : 0,
+                    strokeWidth: 3,
+                    color: color,
+                    backgroundColor: color.withValues(alpha: 0.12),
+                  ),
                 ),
-              ),
-              Icon(
-                transmitting
-                    ? Icons.volume_up_rounded
-                    : listening
-                    ? Icons.mic_rounded
-                    : Icons.hearing_disabled_rounded,
-                color: color,
-                size: 21,
-              ),
-            ],
-          ),
+                Icon(
+                  transmitting
+                      ? (controller.phase == TransferPhase.handshaking ||
+                              controller.phase ==
+                                  TransferPhase.handshakeWaitAck)
+                          ? Icons.wifi_find_rounded
+                          : Icons.volume_up_rounded
+                      : listening
+                      ? Icons.mic_rounded
+                      : Icons.hearing_disabled_rounded,
+                  color: color,
+                  size: 21,
+                ),
+              ],
+            ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(

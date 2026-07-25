@@ -23,6 +23,15 @@ pub const SYNC_BYTE: u8 = 0xA5;
 pub const AMPLITUDE: f32 = 0.6;
 pub const MAX_PAYLOAD: usize = 255;
 
+/// Handshake tone bin (above marker, bin 70 → 3281.25 Hz).
+pub const F_HANDSHAKE_REQ: f32 = 70.0 * DF;
+/// Handshake ACK tone bin (bin 76 → 3562.5 Hz).
+pub const F_HANDSHAKE_ACK: f32 = 76.0 * DF;
+/// End ACK tone bin (bin 82 → 3843.75 Hz).
+pub const F_END_ACK: f32 = 82.0 * DF;
+/// Duration of each handshake tone burst in seconds.
+pub const HANDSHAKE_TONE_SECS: f32 = 0.5;
+
 pub(crate) const SYNC_REPEATS: usize = 5;
 pub(crate) const LEN_REPEATS: usize = 5;
 

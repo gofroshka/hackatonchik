@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1067299211;
+  int get rustContentHash => -1363696838;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -110,7 +110,20 @@ abstract class RustLibApi extends BaseApi {
     required int maxSamples,
   });
 
+  Future<List<MobileReceiveEvent>> crateApiRxCheckPcmForHandshake({
+    required List<int> pcm16Le,
+    required int sampleRate,
+  });
+
+  Future<Uint8List> crateApiTxEndAckPcm({required BigInt id});
+
+  Future<Uint8List> crateApiTxHandshakeAckPcm({required BigInt id});
+
+  Future<Uint8List> crateApiTxHandshakeRequestPcm({required BigInt id});
+
   Future<void> crateApiSimpleInitApp();
+
+  Future<MobileReceiveEvent> crateApiTypesMobileReceiveEventDefault();
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_RxSession;
@@ -385,6 +398,125 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<MobileReceiveEvent>> crateApiRxCheckPcmForHandshake({
+    required List<int> pcm16Le,
+    required int sampleRate,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(pcm16Le, serializer);
+          sse_encode_u_32(sampleRate, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_mobile_receive_event,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiRxCheckPcmForHandshakeConstMeta,
+        argValues: [pcm16Le, sampleRate],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRxCheckPcmForHandshakeConstMeta =>
+      const TaskConstMeta(
+        debugName: "check_pcm_for_handshake",
+        argNames: ["pcm16Le", "sampleRate"],
+      );
+
+  @override
+  Future<Uint8List> crateApiTxEndAckPcm({required BigInt id}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTxEndAckPcmConstMeta,
+        argValues: [id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTxEndAckPcmConstMeta =>
+      const TaskConstMeta(debugName: "end_ack_pcm", argNames: ["id"]);
+
+  @override
+  Future<Uint8List> crateApiTxHandshakeAckPcm({required BigInt id}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTxHandshakeAckPcmConstMeta,
+        argValues: [id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTxHandshakeAckPcmConstMeta =>
+      const TaskConstMeta(debugName: "handshake_ack_pcm", argNames: ["id"]);
+
+  @override
+  Future<Uint8List> crateApiTxHandshakeRequestPcm({required BigInt id}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(id, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTxHandshakeRequestPcmConstMeta,
+        argValues: [id],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTxHandshakeRequestPcmConstMeta =>
+      const TaskConstMeta(debugName: "handshake_request_pcm", argNames: ["id"]);
+
+  @override
   Future<void> crateApiSimpleInitApp() {
     return handler.executeNormal(
       NormalTask(
@@ -393,7 +525,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 12,
             port: port_,
           );
         },
@@ -410,6 +542,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
       const TaskConstMeta(debugName: "init_app", argNames: []);
+
+  @override
+  Future<MobileReceiveEvent> crateApiTypesMobileReceiveEventDefault() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_mobile_receive_event,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiTypesMobileReceiveEventDefaultConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTypesMobileReceiveEventDefaultConstMeta =>
+      const TaskConstMeta(
+        debugName: "mobile_receive_event_default",
+        argNames: [],
+      );
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_RxSession => wire

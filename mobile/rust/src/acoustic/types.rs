@@ -20,6 +20,7 @@ pub struct TxChunk {
 }
 
 #[flutter_rust_bridge::frb(non_opaque)]
+#[derive(Default)]
 pub struct MobileReceiveEvent {
     pub kind: String,
     pub id: String,

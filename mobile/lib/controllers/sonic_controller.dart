@@ -30,11 +30,17 @@ class SonicController extends ChangeNotifier {
   final List<ChatMessage> _chatMessages = [];
   TxSession? _tx;
   RxSession? _rx;
+  bool _receivingData = false;
+  bool _awaitingData = false;
 
   List<ChatMessage> get chatMessages => List.unmodifiable(_chatMessages);
 
   bool get isBusy =>
-      phase == TransferPhase.sending || phase == TransferPhase.listening;
+      phase == TransferPhase.sending ||
+      phase == TransferPhase.listening ||
+      phase == TransferPhase.handshaking ||
+      phase == TransferPhase.handshakeWaitAck ||
+      phase == TransferPhase.endWaitAck;
 
   Future<void> setMode(SonicMode value) async {
     if (mode == value) return;
@@ -82,6 +88,9 @@ class SonicController extends ChangeNotifier {
       _tx = await TxSession.fromFile(path: file!.path!);
       txInfo = await _tx!.info();
       packetCount = txInfo!.packetCount;
+
+      await _doHandshake();
+
       phase = TransferPhase.sending;
       status = 'Передача через динамик';
       notifyListeners();
@@ -94,15 +103,82 @@ class SonicController extends ChangeNotifier {
           notifyListeners();
         },
       );
-      if (phase != TransferPhase.error) {
-        phase = TransferPhase.completed;
-        progress = 1;
-        status = 'Звук передачи завершён';
-        notifyListeners();
-      }
+      if (phase == TransferPhase.error) return;
+
+      await _doEndHandshake();
+
+      phase = TransferPhase.completed;
+      progress = 1;
+      status = 'Передача завершена';
+      notifyListeners();
     } catch (exception) {
       _setError(exception.toString());
     }
+  }
+
+  Future<void> _doHandshake() async {
+    final requestPcm = await handshakeRequestPcm(id: BigInt.zero);
+
+    for (var attempt = 0; attempt < 8; attempt++) {
+      if (phase == TransferPhase.error) return;
+
+      phase = TransferPhase.handshaking;
+      status = 'Рукопожатие: попытка ${attempt + 1}';
+      notifyListeners();
+
+      await _audio.prepareForPlayback();
+      await _audio.playPcmTight(requestPcm);
+
+      phase = TransferPhase.handshakeWaitAck;
+      status = 'Ожидание ответа…';
+      notifyListeners();
+
+      final recorded = await _audio.recordShort(const Duration(milliseconds: 1200));
+      if (recorded != null && recorded.isNotEmpty) {
+        final events = await checkPcmForHandshake(
+          pcm16Le: recorded,
+          sampleRate: acousticSampleRate,
+        );
+        for (final event in events) {
+          if (event.kind == 'handshake_ack') {
+            await _audio.prepareForPlayback();
+            status = 'Связь установлена!';
+            notifyListeners();
+            return;
+          }
+        }
+      }
+    }
+    throw 'Не удалось выполнить рукопожатие. Убедитесь, что приёмник включён и находится рядом.';
+  }
+
+  Future<void> _doEndHandshake() async {
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    for (var attempt = 0; attempt < 5; attempt++) {
+      if (phase == TransferPhase.error) return;
+
+      phase = TransferPhase.endWaitAck;
+      status = 'Подтверждение получения…';
+      notifyListeners();
+
+      final recorded = await _audio.recordShort(const Duration(milliseconds: 600));
+      if (recorded != null && recorded.isNotEmpty) {
+        final events = await checkPcmForHandshake(
+          pcm16Le: recorded,
+          sampleRate: acousticSampleRate,
+        );
+        for (final event in events) {
+          if (event.kind == 'end_ack') {
+            status = 'Подтверждено!';
+            notifyListeners();
+            return;
+          }
+        }
+      }
+    }
+    status = 'Файл отправлен (без подтверждения)';
+    notifyListeners();
   }
 
   Future<void> startReceiving() async {
@@ -115,7 +191,7 @@ class SonicController extends ChangeNotifier {
     await _startListening();
   }
 
-  Future<void> _startListening() async {
+  Future<void> _startListening({bool? checkHandshake}) async {
     try {
       final documents = await getApplicationDocumentsDirectory();
       final output = '${documents.path}/Sonic Share';
@@ -123,6 +199,9 @@ class SonicController extends ChangeNotifier {
         sampleRate: acousticSampleRate,
         outputDir: output,
       );
+      _cancelled = false;
+      _receivingData = false;
+      _awaitingData = false;
       phase = TransferPhase.listening;
       status = mode == SonicMode.chat
           ? 'Слушаю чат через микрофон…'
@@ -132,6 +211,7 @@ class SonicController extends ChangeNotifier {
       microphoneLevel = 0;
       received = null;
       notifyListeners();
+      final doCheckHandshake = checkHandshake ?? (mode == SonicMode.receive);
       await _audio.receive(
         session: _rx!,
         onEvents: _handleReceiveEvents,
@@ -139,6 +219,7 @@ class SonicController extends ChangeNotifier {
           microphoneLevel = level;
           notifyListeners();
         },
+        checkHandshake: doCheckHandshake,
       );
     } catch (exception) {
       _setError(exception.toString());
@@ -209,13 +290,29 @@ class SonicController extends ChangeNotifier {
   void _handleReceiveEvents(List<MobileReceiveEvent> events) {
     for (final event in events) {
       switch (event.kind) {
+        case 'handshake_request':
+          if (!_cancelled && mode == SonicMode.receive && !_receivingData && !_awaitingData) {
+            _awaitingData = true;
+            status = 'Обнаружен запрос связи, отвечаю…';
+            notifyListeners();
+            _respondHandshake(event.id, isEndAck: false);
+          }
+        case 'handshake_ack':
+          status = 'Рукопожатие подтверждено';
+        case 'end_ack':
+          status = 'Передача подтверждена получателем';
         case 'started':
+          if (_isChatContentType(event.contentType)) {
+            status = 'Принимаю сообщение…';
+            notifyListeners();
+            continue;
+          }
+          _awaitingData = false;
+          _receivingData = true;
           packetIndex = 0;
           completedGroups = 0;
           totalGroups = event.totalGroups ?? 0;
-          status = _isChatContentType(event.contentType)
-              ? 'Принимаю сообщение…'
-              : 'Найден файл: ${event.name ?? 'без имени'}';
+          status = 'Найден файл: ${event.name ?? 'без имени'}';
         case 'progress':
           completedGroups = event.completedGroups ?? completedGroups;
           totalGroups = event.totalGroups ?? totalGroups;
@@ -253,18 +350,57 @@ class SonicController extends ChangeNotifier {
             size: event.originalSize?.toInt() ?? 0,
             text: event.text,
           );
+          _receivingData = false;
+          _awaitingData = false;
           phase = TransferPhase.completed;
           progress = 1;
           status = 'Файл принят и SHA-256 проверен';
+          _respondHandshake(event.id, isEndAck: true);
           unawaited(_audio.stop());
         case 'failed':
+          _receivingData = false;
+          _awaitingData = false;
           _setError(event.message ?? 'Ошибка приёма');
       }
     }
     notifyListeners();
   }
 
+  void _respondHandshake(String idHex, {required bool isEndAck}) {
+    unawaited(_doRespondHandshake(idHex, isEndAck: isEndAck));
+  }
+
+  Future<void> _doRespondHandshake(String idHex, {required bool isEndAck}) async {
+    try {
+      if (_cancelled || phase == TransferPhase.error) return;
+      await _audio.stop();
+      if (!isEndAck) {
+        if (_cancelled) return;
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      if (_cancelled) return;
+      final id = BigInt.parse(idHex, radix: 16);
+      final pcm = isEndAck
+          ? await endAckPcm(id: id)
+          : await handshakeAckPcm(id: id);
+      await _audio.prepareForPlayback();
+      await _audio.playShortPcm(pcm);
+      if (_cancelled) return;
+      if (!isEndAck || mode == SonicMode.chat) {
+        await _startListening(checkHandshake: false);
+      } else if (!_cancelled) {
+        notifyListeners();
+      }
+    } catch (e) {
+      _setError('Handshake error: $e');
+    }
+  }
+
+  bool _cancelled = false;
+
   Future<void> stop() async {
+    _cancelled = true;
+    _awaitingData = false;
     if (mode == SonicMode.chat &&
         (phase == TransferPhase.sending || phase == TransferPhase.preparing)) {
       final sending = _chatMessages.lastWhere(
@@ -288,6 +424,7 @@ class SonicController extends ChangeNotifier {
   }
 
   void reset() {
+    _cancelled = false;
     phase = TransferPhase.idle;
     progress = 0;
     packetIndex = 0;

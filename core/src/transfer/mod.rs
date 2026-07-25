@@ -9,6 +9,10 @@ mod types;
 
 pub use geometry::{MAX_DATA_SHARDS, MAX_PARITY_SHARDS, SHARD_SIZE};
 pub use metadata::{detect_content_type, is_chat_content_type, safe_file_name};
+pub use packet::{
+    encode_end_ack, encode_handshake_ack, encode_handshake_req, TYPE_END_ACK, TYPE_HANDSHAKE_ACK,
+    TYPE_HANDSHAKE_REQ,
+};
 pub use receiver::TransferReceiver;
 pub use sender::build_transfer;
 pub use types::{Compression, TransferError, TransferEvent, TransferMetadata, TransferPlan};

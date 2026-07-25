@@ -6,11 +6,14 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use sonic_share_core::detect_tone;
 use sonic_share_core::output::save_received;
+use sonic_share_core::tone;
 use sonic_share_core::transfer::{
     build_transfer, detect_content_type, is_chat_content_type, TransferEvent, TransferReceiver,
 };
 use sonic_share_core::Decoder;
+use sonic_share_core::{F_HANDSHAKE_ACK, F_HANDSHAKE_REQ, F_END_ACK, HANDSHAKE_TONE_SECS};
 
 const CHAT_CONTENT_TYPE: &str = "text/x-sonic-chat; charset=utf-8";
 const PCM_QUEUE_CAPACITY: usize = 8;
@@ -165,6 +168,18 @@ fn send_payload(
     let plan = build_transfer(name, content_type, data, true)
         .map_err(|error| format!("cannot build transfer: {error}"))?;
     let total = plan.packets.len();
+
+    let _ = events.send(RuntimeEvent::Status("Handshake…".to_owned()));
+    let handshake_ok = do_tone_handshake(F_HANDSHAKE_REQ, F_HANDSHAKE_ACK, 6, events, shutdown);
+
+    if handshake_ok {
+        let _ = events.send(RuntimeEvent::Status("Handshake OK!".to_owned()));
+    } else {
+        let _ = events.send(RuntimeEvent::Status(
+            "No handshake response, sending anyway…".to_owned(),
+        ));
+    }
+
     let _ = events.send(RuntimeEvent::Status(format!(
         "Sending '{}' in {total} packet(s)",
         plan.metadata.name
@@ -173,8 +188,159 @@ fn send_payload(
     crate::audio::play_packets_cancellable(&plan.packets, shutdown, |current, total| {
         let _ = events.send(RuntimeEvent::TxProgress { current, total });
     })?;
-    let _ = events.send(RuntimeEvent::Status("Transmission complete".to_owned()));
+
+    let _ = events.send(RuntimeEvent::Status("End handshake…".to_owned()));
+    let end_ok = do_tone_handshake_silent(F_END_ACK, 5, events, shutdown);
+
+    let _ = events.send(RuntimeEvent::Status(if end_ok {
+        "Transfer confirmed by receiver!".to_owned()
+    } else {
+        "Transmission complete (no confirmation)".to_owned()
+    }));
     Ok(())
+}
+
+fn play_tone_pcm(frequency: f32) -> Vec<f32> {
+    tone::generate(HANDSHAKE_TONE_SECS, frequency)
+}
+
+fn do_tone_handshake(
+    send_freq: f32,
+    listen_freq: f32,
+    max_attempts: usize,
+    events: &mpsc::Sender<RuntimeEvent>,
+    shutdown: &AtomicBool,
+) -> bool {
+    for attempt in 0..max_attempts {
+        if shutdown.load(Ordering::Relaxed) {
+            return false;
+        }
+        let _ = events.send(RuntimeEvent::Status(format!(
+            "Handshake attempt {}/{}",
+            attempt + 1,
+            max_attempts
+        )));
+        if play_and_listen_for_tone(send_freq, listen_freq, 1.0, shutdown) {
+            return true;
+        }
+    }
+    false
+}
+
+fn do_tone_handshake_silent(
+    listen_freq: f32,
+    max_attempts: usize,
+    events: &mpsc::Sender<RuntimeEvent>,
+    shutdown: &AtomicBool,
+) -> bool {
+    for attempt in 0..max_attempts {
+        if shutdown.load(Ordering::Relaxed) {
+            return false;
+        }
+        let _ = events.send(RuntimeEvent::Status(format!(
+            "Waiting for confirmation {}/{}",
+            attempt + 1,
+            max_attempts
+        )));
+        if listen_for_tone(listen_freq, 0.6, shutdown) {
+            return true;
+        }
+    }
+    false
+}
+
+fn play_and_listen_for_tone(
+    play_freq: f32,
+    listen_freq: f32,
+    duration_secs: f32,
+    shutdown: &AtomicBool,
+) -> bool {
+    let host = match cpal::default_host().default_output_device() {
+        Some(device) => device,
+        None => return false,
+    };
+    let config = match host.default_output_config() {
+        Ok(config) => config,
+        Err(_) => return false,
+    };
+    let output_sample_rate = config.sample_rate().0;
+    let tone_samples = play_tone_pcm(play_freq);
+    let resampled = crate::audio::resample(&tone_samples, 48000, output_sample_rate);
+    let channels = config.channels() as usize;
+    let (send_tx, send_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(2);
+
+    let stream = host
+        .build_output_stream(
+            &config.clone().into(),
+            move |buffer: &mut [f32], _| {
+                if let Ok(chunk) = send_rx.try_recv() {
+                    for (frame, &value) in buffer.chunks_mut(channels).zip(chunk.iter()) {
+                        for slot in frame {
+                            *slot = value;
+                        }
+                    }
+                }
+            },
+            |_| {},
+            None,
+        )
+        .ok();
+    let Some(stream) = stream else { return false };
+    let _ = stream.play();
+    let _ = send_tx.send(resampled);
+    std::thread::sleep(std::time::Duration::from_secs_f32(duration_secs * 0.5));
+    drop(stream);
+
+    listen_for_tone(listen_freq, duration_secs * 0.5, shutdown)
+}
+
+fn listen_for_tone(
+    frequency: f32,
+    duration_secs: f32,
+    shutdown: &AtomicBool,
+) -> bool {
+    let device = match cpal::default_host().default_input_device() {
+        Some(device) => device,
+        None => return false,
+    };
+    let config = match device.default_input_config() {
+        Ok(config) => config,
+        Err(_) => return false,
+    };
+    let sample_rate = config.sample_rate().0;
+    let found = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let found_clone = std::sync::Arc::clone(&found);
+
+    let stream = crate::audio::build_mono_input_stream_fallible(
+        &device,
+        &config,
+        move |samples| {
+            if detect_tone(&samples, frequency, sample_rate, 0.008) {
+                found_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        },
+        |_| {},
+    );
+
+    match stream {
+        Ok(stream) => {
+            let _ = stream.play();
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs_f32(duration_secs) {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                if found.load(std::sync::atomic::Ordering::Relaxed) {
+                    drop(stream);
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            drop(stream);
+            found.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        Err(_) => false,
+    }
 }
 
 fn rx_loop(
@@ -184,22 +350,27 @@ fn rx_loop(
     shutdown: Arc<AtomicBool>,
 ) {
     let (pcm_tx, pcm_rx) = mpsc::sync_channel::<Vec<f32>>(PCM_QUEUE_CAPACITY);
-    let mut stream = None;
-    let mut decoder = None;
+    let mut stream: Option<cpal::Stream> = None;
+    let mut decoder: Option<Decoder> = None;
     let mut transfers = TransferReceiver::new();
     let mut last_level = Instant::now();
-
+    let mut tone_cooldown = Instant::now();
+    let mut input_sample_rate: u32 = 48000;
+    let mut transfer_active = false;
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
+
         match commands.recv_timeout(Duration::from_millis(20)) {
             Ok(RxCommand::Start) if stream.is_none() => {
                 match start_input(pcm_tx.clone(), events.clone()) {
                     Ok((new_stream, new_decoder, device, sample_rate)) => {
                         stream = Some(new_stream);
                         decoder = Some(new_decoder);
+                        input_sample_rate = sample_rate;
                         transfers = TransferReceiver::new();
+                        transfer_active = false;
                         let _ = events.send(RuntimeEvent::RxStarted {
                             device,
                             sample_rate,
@@ -213,6 +384,7 @@ fn rx_loop(
             Ok(RxCommand::Stop) => {
                 stream = None;
                 decoder = None;
+                transfer_active = false;
                 while pcm_rx.try_recv().is_ok() {}
                 let _ = events.send(RuntimeEvent::RxStopped);
             }
@@ -231,9 +403,78 @@ fn rx_loop(
                 let _ = events.send(RuntimeEvent::InputLevel(peak));
                 last_level = Instant::now();
             }
+            if !transfer_active
+                && tone_cooldown.elapsed() > Duration::from_secs(1)
+                && detect_tone(&chunk, F_HANDSHAKE_REQ, input_sample_rate, 0.008)
+            {
+                let _ = events.send(RuntimeEvent::Status(
+                    "Handshake request detected — sending ACK".to_owned(),
+                ));
+                decoder = None;
+                stream = None;
+                while pcm_rx.try_recv().is_ok() {}
+                let ack_samples = play_tone_pcm(F_HANDSHAKE_ACK);
+                if let Some(output_device) = cpal::default_host().default_output_device() {
+                    if let Ok(config) = output_device.default_output_config() {
+                        let output_sr = config.sample_rate().0;
+                        let resampled = crate::audio::resample(&ack_samples, 48000, output_sr);
+                        let channels = config.channels() as usize;
+                        let (ack_tx, ack_rx) =
+                            std::sync::mpsc::sync_channel::<Vec<f32>>(2);
+                        if let Ok(ack_stream) = output_device.build_output_stream(
+                            &config.clone().into(),
+                            move |buffer: &mut [f32], _| {
+                                if let Ok(chunk) = ack_rx.try_recv() {
+                                    for (frame, &value) in
+                                        buffer.chunks_mut(channels).zip(chunk.iter())
+                                    {
+                                        for slot in frame {
+                                            *slot = value;
+                                        }
+                                    }
+                                }
+                            },
+                            |_| {},
+                            None,
+                        ) {
+                            let _ = ack_stream.play();
+                            let _ = ack_tx.send(resampled);
+                            std::thread::sleep(Duration::from_millis(600));
+                            drop(ack_stream);
+                        }
+                    }
+                }
+                match start_input(pcm_tx.clone(), events.clone()) {
+                    Ok((new_stream, new_decoder, device, new_sr)) => {
+                        stream = Some(new_stream);
+                        decoder = Some(new_decoder);
+                        input_sample_rate = new_sr;
+                        transfer_active = false;
+                        let _ = events.send(RuntimeEvent::RxStarted {
+                            device,
+                            sample_rate: new_sr,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = events.send(RuntimeEvent::Error(error));
+                    }
+                }
+                tone_cooldown = Instant::now();
+                break;
+            }
             active_decoder.push(&chunk);
             while let Some(packet) = active_decoder.poll() {
                 for event in transfers.ingest(&packet) {
+                    let is_start = matches!(event, TransferEvent::Started { .. });
+                    let is_end = matches!(
+                        event,
+                        TransferEvent::Completed { .. } | TransferEvent::Failed { .. }
+                    );
+                    if is_start {
+                        transfer_active = true;
+                    } else if is_end {
+                        transfer_active = false;
+                    }
                     for event in classify_transfer_event(event, &output_dir) {
                         let _ = events.send(event);
                     }
@@ -303,6 +544,15 @@ fn classify_transfer_event(event: TransferEvent, output_dir: &Path) -> Vec<Runti
         TransferEvent::Failed { id, reason } => vec![RuntimeEvent::Error(format!(
             "transfer {id:016x} failed: {reason}"
         ))],
+        TransferEvent::HandshakeRequest { id } => {
+            vec![RuntimeEvent::Status(format!("handshake request {id:016x}"))]
+        }
+        TransferEvent::HandshakeAck { id } => {
+            vec![RuntimeEvent::Status(format!("handshake ack {id:016x}"))]
+        }
+        TransferEvent::EndAck { id } => {
+            vec![RuntimeEvent::Status(format!("end ack {id:016x}"))]
+        }
     }
 }
 

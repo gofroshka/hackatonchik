@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 
 pub(crate) const COLS_PER_SYM: usize = 16;
 
-pub(crate) fn goertzel(samples: &[f32], frequency: f32, sample_rate: u32) -> f32 {
+pub fn goertzel(samples: &[f32], frequency: f32, sample_rate: u32) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
@@ -20,6 +20,18 @@ pub(crate) fn goertzel(samples: &[f32], frequency: f32, sample_rate: u32) -> f32
 }
 
 #[inline]
+/// Check if a tone at a given frequency exceeds a threshold in a PCM buffer.
+/// Returns the peak Goertzel energy.
+pub fn detect_tone(samples: &[f32], frequency: f32, sample_rate: u32, threshold: f32) -> bool {
+    let chunk_size = (sample_rate as f32 * 0.05).round() as usize; // 50ms chunks
+    let chunk_size = chunk_size.max(256).min(samples.len());
+    if samples.len() < chunk_size {
+        return false;
+    }
+    let energy = goertzel(samples, frequency, sample_rate);
+    energy > threshold
+}
+
 pub(crate) fn data_argmax(energies: &[f32; 17]) -> (u8, f32, f32) {
     let mut peak = 0.0f32;
     let mut peak_index = 0usize;

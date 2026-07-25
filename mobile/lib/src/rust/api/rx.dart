@@ -9,6 +9,14 @@ import 'types.dart';
 
 // These functions are ignored because they are not marked as `pub`: `failed_event`, `is_text`, `map_event`
 
+Future<List<MobileReceiveEvent>> checkPcmForHandshake({
+  required List<int> pcm16Le,
+  required int sampleRate,
+}) => RustLib.instance.api.crateApiRxCheckPcmForHandshake(
+  pcm16Le: pcm16Le,
+  sampleRate: sampleRate,
+);
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RxSession>>
 abstract class RxSession implements RustOpaqueInterface {
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.

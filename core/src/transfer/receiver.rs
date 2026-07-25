@@ -49,6 +49,15 @@ impl TransferReceiver {
                     Err(reason) => vec![TransferEvent::Failed { id, reason }],
                 }
             }
+            Packet::HandshakeReq { id } => {
+                vec![TransferEvent::HandshakeRequest { id }]
+            }
+            Packet::HandshakeAck { id } => {
+                vec![TransferEvent::HandshakeAck { id }]
+            }
+            Packet::EndAck { id } => {
+                vec![TransferEvent::EndAck { id }]
+            }
         }
     }
 

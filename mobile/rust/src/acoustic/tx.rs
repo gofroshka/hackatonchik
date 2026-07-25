@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use sonic_share_core::transfer::{build_transfer, detect_content_type};
-use sonic_share_core::{encode, encoded_sample_count, ENCODE_SR};
+use sonic_share_core::tone;
+use sonic_share_core::{
+    encode, encoded_sample_count, ENCODE_SR, F_END_ACK, F_HANDSHAKE_ACK, F_HANDSHAKE_REQ,
+    HANDSHAKE_TONE_SECS,
+};
 
 use super::types::{TxChunk, TxInfo};
 
@@ -109,4 +113,16 @@ impl TxSession {
         self.cancelled = true;
         self.current_wave.clear();
     }
+}
+
+pub fn handshake_request_pcm(_id: u64) -> Vec<u8> {
+    tone::generate_pcm16(HANDSHAKE_TONE_SECS, F_HANDSHAKE_REQ)
+}
+
+pub fn handshake_ack_pcm(_id: u64) -> Vec<u8> {
+    tone::generate_pcm16(HANDSHAKE_TONE_SECS, F_HANDSHAKE_ACK)
+}
+
+pub fn end_ack_pcm(_id: u64) -> Vec<u8> {
+    tone::generate_pcm16(HANDSHAKE_TONE_SECS, F_END_ACK)
 }

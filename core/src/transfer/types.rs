@@ -57,6 +57,15 @@ pub enum TransferEvent {
         id: u64,
         reason: String,
     },
+    HandshakeRequest {
+        id: u64,
+    },
+    HandshakeAck {
+        id: u64,
+    },
+    EndAck {
+        id: u64,
+    },
 }
 
 #[derive(Debug)]

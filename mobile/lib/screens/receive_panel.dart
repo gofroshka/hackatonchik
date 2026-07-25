@@ -26,7 +26,15 @@ class ReceivePanel extends StatelessWidget {
         Text(
           controller.status,
           textAlign: TextAlign.center,
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            color: controller.status.contains('связи')
+                ? const Color(0xFFFFD700)
+                : controller.status.contains('подтверждена')
+                ? const Color(0xFF43E6D1)
+                : null,
+          ),
         ),
         if (listening && controller.totalGroups > 0) ...[
           const SizedBox(height: 14),
