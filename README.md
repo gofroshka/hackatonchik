@@ -22,11 +22,14 @@ Sonic Share передаёт файлы и текстовые сообщения
 
 | Путь | Описание |
 | --- | --- |
-| `core/` | Акустический кодер и декодер, детектор сигнала, FEC и протокол передачи. |
-| `cli/` | Терминальный клиент на Rust и диагностические утилиты. |
-| `mobile/` | Flutter-приложение для Android и iOS. |
-| `mobile/rust/` | Адаптер Flutter Rust Bridge для `core`. |
-| `mobile/rust_builder/` | Интеграция сборки нативного Flutter-плагина. |
+| `src/core/` | Акустический кодер и декодер, детектор сигнала, FEC и протокол передачи. |
+| `src/cli/` | Терминальный клиент на Rust и диагностические утилиты. |
+| `src/mobile/` | Flutter-приложение для Android и iOS. |
+| `src/mobile/rust/` | Адаптер Flutter Rust Bridge для `core`. |
+| `src/mobile/rust_builder/` | Интеграция сборки нативного Flutter-плагина. |
+| `config/` | Конфигурация проекта (example.env). |
+| `docs/` | Документация: архитектура, протокол, ограничения, результаты тестов. |
+| `artifacts/` | Демонстрационные материалы, тестовые ассеты и результаты тестов. |
 
 ## Требования
 
@@ -82,7 +85,7 @@ cargo run -p sonic-share-cli --bin record -- recording.wav 10
 cargo run -p sonic-share-cli --bin decode -- recording.wav
 
 # Быстро проверить все тестовые assets и сравнить airtime профилей
-cargo run -p sonic-share-cli --bin bench-assets -- assets
+cargo run -p sonic-share-cli --bin bench-assets -- artifacts/test-assets
 ```
 
 По умолчанию используется надёжный hybrid-профиль OFDM (дифференциальный DBPSK с
@@ -99,12 +102,12 @@ Fast FSK, а `--robust` — Robust FSK для максимальной дист�
 Установите зависимости и запустите Flutter-клиент:
 
 ```bash
-cd mobile
+cd src/mobile
 flutter pub get
 flutter run
 ```
 
-Сборка приложений выполняется из каталога `mobile/`:
+Сборка приложений выполняется из каталога `src/mobile/`:
 
 ```bash
 flutter build apk --debug
