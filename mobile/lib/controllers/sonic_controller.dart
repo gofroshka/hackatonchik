@@ -26,6 +26,8 @@ class SonicController extends ChangeNotifier {
   int totalGroups = 0;
   String status = 'Готов к передаче';
   String? error;
+  // false = fast OFDM link; true = slow but very robust Robust-FSK link.
+  bool reliableMode = false;
   ReceivedTransfer? received;
   final List<ChatMessage> _chatMessages = [];
   TxSession? _tx;
@@ -35,6 +37,12 @@ class SonicController extends ChangeNotifier {
 
   bool get isBusy =>
       phase == TransferPhase.sending || phase == TransferPhase.listening;
+
+  void setReliableMode(bool value) {
+    if (isBusy || reliableMode == value) return;
+    reliableMode = value;
+    notifyListeners();
+  }
 
   Future<void> setMode(SonicMode value) async {
     if (mode == value) return;
@@ -79,7 +87,10 @@ class SonicController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      _tx = await TxSession.fromFile(path: file!.path!);
+      _tx = await TxSession.fromFile(
+        path: file!.path!,
+        reliable: reliableMode,
+      );
       txInfo = await _tx!.info();
       packetCount = txInfo!.packetCount;
       phase = TransferPhase.sending;
@@ -122,6 +133,7 @@ class SonicController extends ChangeNotifier {
       _rx = await RxSession.newInstance(
         sampleRate: acousticSampleRate,
         outputDir: output,
+        reliable: reliableMode,
       );
       phase = TransferPhase.listening;
       status = mode == SonicMode.chat
@@ -177,6 +189,7 @@ class SonicController extends ChangeNotifier {
         name: 'chat-${now.millisecondsSinceEpoch}.txt',
         contentType: 'text/x-sonic-chat; charset=utf-8',
         data: utf8.encode(text),
+        reliable: reliableMode,
       );
       txInfo = await _tx!.info();
       packetCount = txInfo!.packetCount;

@@ -3,23 +3,180 @@ use std::sync::mpsc::{channel, sync_channel, TryRecvError, TrySendError};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use sonic_share_core::{encode, ENCODE_SR};
+use sonic_share_core::{
+    encode_hybrid_packet, hybrid_packet_routes, AcousticProfile, OfdmProfile, PacketPhy, ENCODE_SR,
+};
 
 pub fn play_packets(packets: &[Vec<u8>]) {
-    play_packets_fallible(packets, |index, total| println!("packet {index}/{total}"))
-        .unwrap_or_else(|error| fatal(&error));
+    play_packets_profile(packets, AcousticProfile::default());
+}
+
+/// Play a raw mono waveform (48 kHz) through the default output device.
+pub fn play_samples(samples: &[f32]) -> Result<(), String> {
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| "no output device available".to_owned())?;
+    let config = device
+        .default_output_config()
+        .map_err(|error| format!("no default output config: {error}"))?;
+    let output_sample_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let wave = resample(samples, ENCODE_SR, output_sample_rate);
+    let (audio_tx, audio_rx) = sync_channel::<Vec<f32>>(2);
+    let (done_tx, done_rx) = channel::<()>();
+
+    macro_rules! build {
+        ($sample:ty, $convert:expr) => {{
+            let mut current = Vec::<f32>::new();
+            let mut position = 0usize;
+            let mut finished = false;
+            let done_tx = done_tx.clone();
+            device.build_output_stream(
+                &config.clone().into(),
+                move |buffer: &mut [$sample], _| {
+                    for frame in buffer.chunks_mut(channels) {
+                        if position >= current.len() && !finished {
+                            match audio_rx.try_recv() {
+                                Ok(next) if next.is_empty() => {
+                                    finished = true;
+                                    let _ = done_tx.send(());
+                                }
+                                Ok(next) => {
+                                    current = next;
+                                    position = 0;
+                                }
+                                Err(TryRecvError::Disconnected) => finished = true,
+                                Err(TryRecvError::Empty) => {}
+                            }
+                        }
+                        let value = if position < current.len() {
+                            let value = current[position];
+                            position += 1;
+                            value
+                        } else {
+                            0.0
+                        };
+                        for slot in frame {
+                            *slot = $convert(value);
+                        }
+                    }
+                },
+                move |error| eprintln!("output stream error: {error}"),
+                None,
+            )
+        }};
+    }
+
+    let stream = match config.sample_format() {
+        SampleFormat::F32 => build!(f32, |value: f32| value),
+        SampleFormat::I16 => build!(i16, |value: f32| (value.clamp(-1.0, 1.0) * i16::MAX as f32)
+            as i16),
+        SampleFormat::U16 => build!(u16, |value: f32| ((value.clamp(-1.0, 1.0) * 0.5 + 0.5)
+            * u16::MAX as f32) as u16),
+        other => return Err(format!("unsupported output format: {other:?}")),
+    }
+    .map_err(|error| format!("cannot open output stream: {error}"))?;
+    stream
+        .play()
+        .map_err(|error| format!("cannot start output: {error}"))?;
+    let _ = audio_tx.send(wave);
+    let _ = audio_tx.send(Vec::new());
+    let _ = done_rx.recv();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    Ok(())
+}
+
+pub fn play_packets_profile(packets: &[Vec<u8>], profile: AcousticProfile) {
+    play_packets_fallible_with_profile(packets, profile, |index, total| {
+        println!("packet {index}/{total}")
+    })
+    .unwrap_or_else(|error| fatal(&error));
+}
+
+pub fn play_packets_hybrid(packets: &[Vec<u8>], profile: OfdmProfile) {
+    play_packets_fallible_hybrid(packets, profile, |index, total| {
+        println!("packet {index}/{total}")
+    })
+    .unwrap_or_else(|error| fatal(&error));
+}
+
+pub fn play_packets_fallible_hybrid(
+    packets: &[Vec<u8>],
+    profile: OfdmProfile,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), String> {
+    play_packets_cancellable_hybrid(packets, &AtomicBool::new(false), profile, on_progress)
 }
 
 pub fn play_packets_fallible(
     packets: &[Vec<u8>],
     on_progress: impl FnMut(usize, usize),
 ) -> Result<(), String> {
-    play_packets_cancellable(packets, &AtomicBool::new(false), on_progress)
+    play_packets_fallible_with_profile(packets, AcousticProfile::default(), on_progress)
+}
+
+pub fn play_packets_fallible_with_profile(
+    packets: &[Vec<u8>],
+    profile: AcousticProfile,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), String> {
+    play_packets_cancellable_with_profile(packets, &AtomicBool::new(false), profile, on_progress)
 }
 
 pub fn play_packets_cancellable(
     packets: &[Vec<u8>],
     cancelled: &AtomicBool,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), String> {
+    play_packets_cancellable_with_profile(
+        packets,
+        cancelled,
+        AcousticProfile::default(),
+        on_progress,
+    )
+}
+
+pub fn play_packets_cancellable_with_profile(
+    packets: &[Vec<u8>],
+    cancelled: &AtomicBool,
+    profile: AcousticProfile,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), String> {
+    let routes = vec![PacketPhy::Fsk; packets.len()];
+    play_packets_cancellable_routed(
+        packets,
+        &routes,
+        cancelled,
+        profile,
+        OfdmProfile::qpsk(profile.lane()),
+        on_progress,
+    )
+}
+
+pub fn play_packets_cancellable_hybrid(
+    packets: &[Vec<u8>],
+    cancelled: &AtomicBool,
+    profile: OfdmProfile,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), String> {
+    let routes = hybrid_packet_routes(packets);
+    play_packets_cancellable_routed(
+        packets,
+        &routes,
+        cancelled,
+        AcousticProfile::fast(profile.lane()),
+        profile,
+        on_progress,
+    )
+}
+
+fn play_packets_cancellable_routed(
+    packets: &[Vec<u8>],
+    routes: &[PacketPhy],
+    cancelled: &AtomicBool,
+    fsk_profile: AcousticProfile,
+    ofdm_profile: OfdmProfile,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<(), String> {
     let host = cpal::default_host();
@@ -31,6 +188,12 @@ pub fn play_packets_cancellable(
         .map_err(|error| format!("no default output config: {error}"))?;
     let output_sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
+    if std::env::var_os("DEBUG").is_some() {
+        eprintln!(
+            "[audio] output device rate {output_sample_rate} Hz, {channels} ch, {:?}",
+            config.sample_format()
+        );
+    }
     let (audio_tx, audio_rx) = sync_channel::<Vec<f32>>(2);
     let (done_tx, done_rx) = channel::<()>();
     let (error_tx, error_rx) = channel::<String>();
@@ -95,11 +258,15 @@ pub fn play_packets_cancellable(
         .play()
         .map_err(|error| format!("cannot start output: {error}"))?;
 
-    for (index, packet) in packets.iter().enumerate() {
+    for (index, (packet, &route)) in packets.iter().zip(routes).enumerate() {
         if cancelled.load(Ordering::Relaxed) {
             return Err("transmission cancelled".to_owned());
         }
-        let mut wave = resample(&encode(packet), ENCODE_SR, output_sample_rate);
+        let mut wave = resample(
+            &encode_hybrid_packet(packet, route, fsk_profile, ofdm_profile),
+            ENCODE_SR,
+            output_sample_rate,
+        );
         loop {
             match audio_tx.try_send(wave) {
                 Ok(()) => break,

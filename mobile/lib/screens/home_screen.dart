@@ -33,6 +33,8 @@ class HomeScreen extends StatelessWidget {
                     const _Header(),
                     const SizedBox(height: 28),
                     _ModeSelector(controller: controller),
+                    const SizedBox(height: 12),
+                    _ProfileSelector(controller: controller),
                     const SizedBox(height: 28),
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 320),
@@ -60,6 +62,36 @@ class HomeScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProfileSelector extends StatelessWidget {
+  const _ProfileSelector({required this.controller});
+
+  final SonicController controller;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: double.infinity,
+    child: SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment(
+          value: false,
+          label: Text('Быстро'),
+          icon: Icon(Icons.bolt_rounded),
+        ),
+        ButtonSegment(
+          value: true,
+          label: Text('Надёжно'),
+          icon: Icon(Icons.shield_rounded),
+        ),
+      ],
+      selected: {controller.reliableMode},
+      onSelectionChanged: controller.isBusy
+          ? null
+          : (value) => controller.setReliableMode(value.first),
+      showSelectedIcon: false,
+    ),
+  );
 }
 
 class _Header extends StatelessWidget {
@@ -124,7 +156,7 @@ class _ProtocolBadge extends StatelessWidget {
         color: const Color(0x1243E6D1),
       ),
       child: const Text(
-        'RS + FEC',
+        'OFDM + FEC',
         style: TextStyle(color: Color(0xFF43E6D1), fontSize: 11),
       ),
     );

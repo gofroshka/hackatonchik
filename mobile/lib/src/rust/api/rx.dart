@@ -7,17 +7,23 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'types.dart';
 
-// These functions are ignored because they are not marked as `pub`: `failed_event`, `is_text`, `map_event`
+// These functions are ignored because they are not marked as `pub`: `failed_event`, `is_text`, `map_event`, `poll`, `push`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `MobileDecoder`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RxSession>>
 abstract class RxSession implements RustOpaqueInterface {
   // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
+  /// Start receiving. `reliable` selects the slow but robust Robust-FSK link;
+  /// otherwise the faster OFDM link is used (with FSK only for tiny inline chat
+  /// frames, handled transparently by `HybridDecoder`).
   static Future<RxSession> newInstance({
     required int sampleRate,
     required String outputDir,
+    required bool reliable,
   }) => RustLib.instance.api.crateApiRxRxSessionNew(
     sampleRate: sampleRate,
     outputDir: outputDir,
+    reliable: reliable,
   );
 
   Future<List<MobileReceiveEvent>> pushPcm16({required List<int> pcm16Le});

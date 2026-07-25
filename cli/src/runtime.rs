@@ -10,7 +10,7 @@ use sonic_share_core::output::save_received;
 use sonic_share_core::transfer::{
     build_transfer, detect_content_type, is_chat_content_type, TransferEvent, TransferReceiver,
 };
-use sonic_share_core::Decoder;
+use sonic_share_core::{HybridDecoder, OfdmProfile};
 
 const CHAT_CONTENT_TYPE: &str = "text/x-sonic-chat; charset=utf-8";
 const PCM_QUEUE_CAPACITY: usize = 8;
@@ -170,9 +170,14 @@ fn send_payload(
         plan.metadata.name
     )));
     let _ = events.send(RuntimeEvent::TxStarted);
-    crate::audio::play_packets_cancellable(&plan.packets, shutdown, |current, total| {
-        let _ = events.send(RuntimeEvent::TxProgress { current, total });
-    })?;
+    crate::audio::play_packets_cancellable_hybrid(
+        &plan.packets,
+        shutdown,
+        OfdmProfile::qpsk(0),
+        |current, total| {
+            let _ = events.send(RuntimeEvent::TxProgress { current, total });
+        },
+    )?;
     let _ = events.send(RuntimeEvent::Status("Transmission complete".to_owned()));
     Ok(())
 }
@@ -246,7 +251,7 @@ fn rx_loop(
 fn start_input(
     pcm_tx: SyncSender<Vec<f32>>,
     events: mpsc::Sender<RuntimeEvent>,
-) -> Result<(cpal::Stream, Decoder, String, u32), String> {
+) -> Result<(cpal::Stream, HybridDecoder, String, u32), String> {
     let device = cpal::default_host()
         .default_input_device()
         .ok_or_else(|| "no input device available".to_owned())?;
@@ -269,7 +274,12 @@ fn start_input(
     stream
         .play()
         .map_err(|error| format!("cannot start input stream: {error}"))?;
-    Ok((stream, Decoder::new(sample_rate), name, sample_rate))
+    Ok((
+        stream,
+        HybridDecoder::with_sample_rate(sample_rate, OfdmProfile::qpsk(0)),
+        name,
+        sample_rate,
+    ))
 }
 
 fn classify_transfer_event(event: TransferEvent, output_dir: &Path) -> Vec<RuntimeEvent> {

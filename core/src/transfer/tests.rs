@@ -72,6 +72,36 @@ fn medium_transfer_uses_adaptive_geometry_and_survives_two_losses() {
 }
 
 #[test]
+fn replays_shards_that_arrive_before_manifest() {
+    let data = (0..4096)
+        .map(|value| (value * 29) as u8)
+        .collect::<Vec<_>>();
+    let plan = build_transfer("reordered.bin", "application/octet-stream", &data, false).unwrap();
+    let manifest = plan
+        .packets
+        .iter()
+        .find(|packet| matches!(decode_packet(packet), Ok(Packet::Manifest(_))))
+        .unwrap();
+    let mut reordered = plan
+        .packets
+        .iter()
+        .filter(|packet| matches!(decode_packet(packet), Ok(Packet::Shard { .. })))
+        .cloned()
+        .collect::<Vec<_>>();
+    reordered.push(manifest.clone());
+
+    let mut receiver = TransferReceiver::new();
+    let completed = reordered
+        .iter()
+        .flat_map(|packet| receiver.ingest(packet))
+        .find_map(|event| match event {
+            TransferEvent::Completed { data, .. } => Some(data),
+            _ => None,
+        });
+    assert_eq!(completed.as_deref(), Some(data.as_slice()));
+}
+
+#[test]
 fn sanitizes_received_file_names() {
     assert_eq!(safe_file_name("../../secret.txt"), "secret.txt");
     assert_eq!(safe_file_name(".."), "received.bin");

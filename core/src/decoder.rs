@@ -1,8 +1,5 @@
 use crate::detector::{data_argmax, goertzel, COLS_PER_SYM};
-use crate::protocol::{
-    crc8, data_freq, majority_byte, symbol_len, tone_len, F_MARKER, LEN_REPEATS, SYNC_BYTE,
-    SYNC_REPEATS,
-};
+use crate::protocol::{crc8, majority, AcousticProfile, SYNC_BYTE};
 use crate::rs;
 
 enum Attempt {
@@ -20,24 +17,33 @@ enum Lock {
 /// Incremental acoustic frame decoder.
 pub struct Decoder {
     sample_rate: u32,
+    profile: AcousticProfile,
     hop: usize,
     tone_len: usize,
     frequencies: Vec<f32>,
     buffer: Vec<f32>,
-    columns: Vec<[f32; 17]>,
+    columns: Vec<[f32; 33]>,
     scan_column: usize,
     pending: Option<usize>,
 }
 
 impl Decoder {
     pub fn new(sample_rate: u32) -> Self {
-        let symbol_len = symbol_len(sample_rate);
-        let mut frequencies: Vec<f32> = (0..16u8).map(data_freq).collect();
-        frequencies.push(F_MARKER);
+        Self::with_profile(sample_rate, AcousticProfile::default())
+    }
+
+    pub fn with_profile(sample_rate: u32, profile: AcousticProfile) -> Self {
+        let symbol_len = profile.symbol_len(sample_rate);
+        let mut frequencies: Vec<f32> = (0..16u8).map(|value| profile.data_freq(value)).collect();
+        if profile.is_dual_tone() {
+            frequencies.extend((0..16u8).map(|value| profile.high_data_freq(value)));
+        }
+        frequencies.push(profile.marker_freq());
         Self {
             sample_rate,
+            profile,
             hop: (symbol_len / COLS_PER_SYM).max(1),
-            tone_len: tone_len(sample_rate),
+            tone_len: profile.tone_len(sample_rate),
             frequencies,
             buffer: Vec::new(),
             columns: Vec::new(),
@@ -54,7 +60,7 @@ impl Decoder {
         while self.columns.len() * self.hop + self.tone_len <= self.buffer.len() {
             let start = self.columns.len() * self.hop;
             let window = &self.buffer[start..start + self.tone_len];
-            let mut energies = [0.0f32; 17];
+            let mut energies = [0.0f32; 33];
             for (index, &frequency) in self.frequencies.iter().enumerate() {
                 energies[index] = goertzel(window, frequency, self.sample_rate);
             }
@@ -72,33 +78,55 @@ impl Decoder {
     }
 
     fn read_byte(&self, cursor: &mut f32) -> Option<u8> {
+        if self.profile.is_dual_tone() {
+            let column = cursor.round() as i64;
+            if column < 0 || column as usize >= self.columns.len() {
+                return None;
+            }
+            let energies = &self.columns[column as usize];
+            let (high, _, _) = data_argmax(&energies[..16]);
+            let (low, _, _) = data_argmax(&energies[16..32]);
+            *cursor = column as f32 + COLS_PER_SYM as f32;
+            return Some((high << 4) | low);
+        }
         let (high, next) = self.read_symbol(*cursor)?;
         let (low, next) = self.read_symbol(next)?;
         *cursor = next;
         Some((high << 4) | low)
     }
 
+    fn data_peak(&self, column: usize) -> f32 {
+        let energies = &self.columns[column];
+        let (_, low_peak, _) = data_argmax(&energies[..16]);
+        if self.profile.is_dual_tone() {
+            let (_, high_peak, _) = data_argmax(&energies[16..32]);
+            low_peak.max(high_peak)
+        } else {
+            low_peak
+        }
+    }
+
     fn try_decode(&self, start_column: usize) -> Attempt {
         let mut cursor = start_column as f32;
-        let mut syncs = [0u8; SYNC_REPEATS];
+        let mut syncs = vec![0u8; self.profile.sync_repeats()];
         for sync in &mut syncs {
             *sync = match self.read_byte(&mut cursor) {
                 Some(byte) => byte,
                 None => return Attempt::NeedMore,
             };
         }
-        if majority_byte(&syncs) != Some(SYNC_BYTE) {
+        if majority(&syncs) != Some(SYNC_BYTE) {
             return Attempt::Invalid;
         }
 
-        let mut lengths = [0u8; LEN_REPEATS];
+        let mut lengths = vec![0u8; self.profile.len_repeats()];
         for length in &mut lengths {
             *length = match self.read_byte(&mut cursor) {
                 Some(byte) => byte,
                 None => return Attempt::NeedMore,
             };
         }
-        let Some(length_byte) = majority_byte(&lengths) else {
+        let Some(length_byte) = majority(&lengths) else {
             return Attempt::Invalid;
         };
         let data_len = length_byte as usize + 2;
@@ -123,8 +151,8 @@ impl Decoder {
     }
 
     fn lock_frame(&mut self, transition: usize) -> Lock {
-        let low = transition.saturating_sub(COLS_PER_SYM);
-        let wanted_high = transition + 2 * COLS_PER_SYM;
+        let low = transition.saturating_sub(3 * COLS_PER_SYM);
+        let wanted_high = transition + 3 * COLS_PER_SYM;
         let last = self.columns.len().saturating_sub(1);
         let high = wanted_high.min(last);
         let truncated = wanted_high > last;
@@ -167,14 +195,14 @@ impl Decoder {
         let column_count = self.columns.len();
         let mut column = self.scan_column;
         while column < column_count {
-            let marker = self.columns[column][16];
+            let marker = self.columns[column][self.profile.marker_index()];
             if marker > floor {
-                let (_, data_peak, _) = data_argmax(&self.columns[column]);
+                let data_peak = self.data_peak(column);
                 if marker > data_peak * 2.0 {
                     let mut transition = column;
                     while transition < column_count {
-                        let marker = self.columns[transition][16];
-                        let (_, data_peak, _) = data_argmax(&self.columns[transition]);
+                        let marker = self.columns[transition][self.profile.marker_index()];
+                        let data_peak = self.data_peak(transition);
                         if marker > floor && marker > data_peak * 1.5 {
                             transition += 1;
                         } else {
@@ -217,7 +245,15 @@ impl Decoder {
 
 /// Decode every frame contained in a finished buffer.
 pub fn decode_all(sample_rate: u32, samples: &[f32]) -> Vec<Vec<u8>> {
-    let mut decoder = Decoder::new(sample_rate);
+    decode_all_with_profile(sample_rate, samples, AcousticProfile::default())
+}
+
+pub fn decode_all_with_profile(
+    sample_rate: u32,
+    samples: &[f32],
+    profile: AcousticProfile,
+) -> Vec<Vec<u8>> {
+    let mut decoder = Decoder::with_profile(sample_rate, profile);
     decoder.push(samples);
     let mut messages = Vec::new();
     while let Some(message) = decoder.poll() {

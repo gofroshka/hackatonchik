@@ -83,6 +83,7 @@ abstract class RustLibApi extends BaseApi {
   Future<RxSession> crateApiRxRxSessionNew({
     required int sampleRate,
     required String outputDir,
+    required bool reliable,
   });
 
   Future<List<MobileReceiveEvent>> crateApiRxRxSessionPushPcm16({
@@ -96,11 +97,13 @@ abstract class RustLibApi extends BaseApi {
     required String name,
     String? contentType,
     required List<int> data,
+    required bool reliable,
   });
 
   Future<TxSession> crateApiTxTxSessionFromFile({
     required String path,
     String? contentType,
+    required bool reliable,
   });
 
   Future<TxInfo> crateApiTxTxSessionInfo({required TxSession that});
@@ -141,6 +144,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<RxSession> crateApiRxRxSessionNew({
     required int sampleRate,
     required String outputDir,
+    required bool reliable,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -148,6 +152,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_u_32(sampleRate, serializer);
           sse_encode_String(outputDir, serializer);
+          sse_encode_bool(reliable, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -161,7 +166,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiRxRxSessionNewConstMeta,
-        argValues: [sampleRate, outputDir],
+        argValues: [sampleRate, outputDir, reliable],
         apiImpl: this,
       ),
     );
@@ -169,7 +174,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiRxRxSessionNewConstMeta => const TaskConstMeta(
     debugName: "RxSession_new",
-    argNames: ["sampleRate", "outputDir"],
+    argNames: ["sampleRate", "outputDir", "reliable"],
   );
 
   @override
@@ -246,6 +251,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String name,
     String? contentType,
     required List<int> data,
+    required bool reliable,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -254,6 +260,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(name, serializer);
           sse_encode_opt_String(contentType, serializer);
           sse_encode_list_prim_u_8_loose(data, serializer);
+          sse_encode_bool(reliable, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -267,7 +274,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiTxTxSessionFromDataConstMeta,
-        argValues: [name, contentType, data],
+        argValues: [name, contentType, data, reliable],
         apiImpl: this,
       ),
     );
@@ -276,13 +283,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiTxTxSessionFromDataConstMeta =>
       const TaskConstMeta(
         debugName: "TxSession_from_data",
-        argNames: ["name", "contentType", "data"],
+        argNames: ["name", "contentType", "data", "reliable"],
       );
 
   @override
   Future<TxSession> crateApiTxTxSessionFromFile({
     required String path,
     String? contentType,
+    required bool reliable,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -290,6 +298,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(path, serializer);
           sse_encode_opt_String(contentType, serializer);
+          sse_encode_bool(reliable, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -303,7 +312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiTxTxSessionFromFileConstMeta,
-        argValues: [path, contentType],
+        argValues: [path, contentType, reliable],
         apiImpl: this,
       ),
     );
@@ -312,7 +321,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiTxTxSessionFromFileConstMeta =>
       const TaskConstMeta(
         debugName: "TxSession_from_file",
-        argNames: ["path", "contentType"],
+        argNames: ["path", "contentType", "reliable"],
       );
 
   @override

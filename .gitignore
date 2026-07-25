@@ -59,5 +59,6 @@ Thumbs.db
 
 # Local transfer and diagnostic output
 **/received/
+**/received-fast/
 *.wav
 *.pcm

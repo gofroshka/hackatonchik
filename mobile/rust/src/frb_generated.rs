@@ -72,12 +72,14 @@ fn wire__crate__api__rx__RxSession_new_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_sample_rate = <u32>::sse_decode(&mut deserializer);
             let api_output_dir = <String>::sse_decode(&mut deserializer);
+            let api_reliable = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok(crate::api::rx::RxSession::new(
                         api_sample_rate,
                         api_output_dir,
+                        api_reliable,
                     ))?;
                     Ok(output_ok)
                 })())
@@ -214,11 +216,16 @@ fn wire__crate__api__tx__TxSession_from_data_impl(
             let api_name = <String>::sse_decode(&mut deserializer);
             let api_content_type = <Option<String>>::sse_decode(&mut deserializer);
             let api_data = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_reliable = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::tx::TxSession::from_data(api_name, api_content_type, api_data)?;
+                    let output_ok = crate::api::tx::TxSession::from_data(
+                        api_name,
+                        api_content_type,
+                        api_data,
+                        api_reliable,
+                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -249,11 +256,15 @@ fn wire__crate__api__tx__TxSession_from_file_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_path = <String>::sse_decode(&mut deserializer);
             let api_content_type = <Option<String>>::sse_decode(&mut deserializer);
+            let api_reliable = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::tx::TxSession::from_file(api_path, api_content_type)?;
+                    let output_ok = crate::api::tx::TxSession::from_file(
+                        api_path,
+                        api_content_type,
+                        api_reliable,
+                    )?;
                     Ok(output_ok)
                 })())
             }

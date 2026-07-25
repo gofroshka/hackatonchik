@@ -11,22 +11,31 @@ import 'types.dart';
 abstract class TxSession implements RustOpaqueInterface {
   Future<void> cancel();
 
+  /// Build a transfer from bytes. `reliable` selects the slow but robust
+  /// Robust-FSK link; otherwise the faster OFDM link is used (with FSK only for
+  /// tiny inline chat frames, handled by the hybrid router transparently).
   static Future<TxSession> fromData({
     required String name,
     String? contentType,
     required List<int> data,
+    required bool reliable,
   }) => RustLib.instance.api.crateApiTxTxSessionFromData(
     name: name,
     contentType: contentType,
     data: data,
+    reliable: reliable,
   );
 
+  /// Build a transfer from a file. `reliable` selects the slow but robust
+  /// Robust-FSK link; otherwise the faster OFDM link is used.
   static Future<TxSession> fromFile({
     required String path,
     String? contentType,
+    required bool reliable,
   }) => RustLib.instance.api.crateApiTxTxSessionFromFile(
     path: path,
     contentType: contentType,
+    reliable: reliable,
   );
 
   Future<TxInfo> info();

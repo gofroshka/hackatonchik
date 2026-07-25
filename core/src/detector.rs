@@ -20,7 +20,8 @@ pub(crate) fn goertzel(samples: &[f32], frequency: f32, sample_rate: u32) -> f32
 }
 
 #[inline]
-pub(crate) fn data_argmax(energies: &[f32; 17]) -> (u8, f32, f32) {
+pub(crate) fn data_argmax(energies: &[f32]) -> (u8, f32, f32) {
+    debug_assert!(energies.len() >= 16);
     let mut peak = 0.0f32;
     let mut peak_index = 0usize;
     let mut sum = 0.0f32;

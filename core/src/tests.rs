@@ -5,12 +5,15 @@ use crate::protocol::{LEN_REPEATS, SYNC_REPEATS};
 use crate::*;
 
 fn overwrite_frame_byte(wave: &mut [f32], byte_index: usize, value: u8) {
+    let profile = AcousticProfile::default();
     let ramp = (TONE_SAMPLES / 16).max(1);
-    for (nibble_index, nibble) in [value >> 4, value & 0x0f].into_iter().enumerate() {
-        let period_index = 1 + PREAMBLE_SYMBOLS + byte_index * 2 + nibble_index;
+    if profile.is_dual_tone() {
+        let period_index = 1 + PREAMBLE_SYMBOLS + byte_index;
         let start = period_index * SYMBOL_SAMPLES;
-        let phase_step = 2.0 * PI * data_freq(nibble) / ENCODE_SR as f32;
-        let mut phase = 0.0f32;
+        let high_step = 2.0 * PI * profile.data_freq(value >> 4) / ENCODE_SR as f32;
+        let low_step = 2.0 * PI * profile.high_data_freq(value & 0x0f) / ENCODE_SR as f32;
+        let mut high_phase = 0.0f32;
+        let mut low_phase = 0.0f32;
         for index in 0..TONE_SAMPLES {
             let edge = index.min(TONE_SAMPLES - 1 - index);
             let envelope = if edge < ramp {
@@ -18,8 +21,26 @@ fn overwrite_frame_byte(wave: &mut [f32], byte_index: usize, value: u8) {
             } else {
                 1.0
             };
-            wave[start + index] = phase.sin() * AMPLITUDE * envelope;
-            phase += phase_step;
+            wave[start + index] = (high_phase.sin() + low_phase.sin()) * AMPLITUDE * envelope;
+            high_phase += high_step;
+            low_phase += low_step;
+        }
+    } else {
+        for (nibble_index, nibble) in [value >> 4, value & 0x0f].into_iter().enumerate() {
+            let period_index = 1 + PREAMBLE_SYMBOLS + byte_index * 2 + nibble_index;
+            let start = period_index * SYMBOL_SAMPLES;
+            let phase_step = 2.0 * PI * data_freq(nibble) / ENCODE_SR as f32;
+            let mut phase = 0.0f32;
+            for index in 0..TONE_SAMPLES {
+                let edge = index.min(TONE_SAMPLES - 1 - index);
+                let envelope = if edge < ramp {
+                    0.5 * (1.0 - (PI * edge as f32 / ramp as f32).cos())
+                } else {
+                    1.0
+                };
+                wave[start + index] = phase.sin() * AMPLITUDE * envelope;
+                phase += phase_step;
+            }
         }
     }
 }

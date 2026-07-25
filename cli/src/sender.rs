@@ -2,7 +2,10 @@ use std::io::Read;
 use std::path::Path;
 
 use sonic_share_core::transfer::{build_transfer, detect_content_type, Compression};
-use sonic_share_core::{encode, ENCODE_SR};
+use sonic_share_core::{
+    encode_hybrid_packet, hybrid_packet_routes, hybrid_sample_count, AcousticProfile, OfdmProfile,
+    PacketPhy, ENCODE_SR, MAX_LANES,
+};
 
 struct Options {
     positional: Vec<String>,
@@ -11,6 +14,10 @@ struct Options {
     name: Option<String>,
     play: bool,
     compress: bool,
+    robust: bool,
+    fsk: bool,
+    qam16: bool,
+    lane: u8,
 }
 
 pub fn run() {
@@ -18,16 +25,45 @@ pub fn run() {
     let (name, content_type, data) = load_input(&options);
     let plan = build_transfer(&name, &content_type, &data, options.compress)
         .unwrap_or_else(|error| fatal(&format!("cannot build transfer: {error}")));
+    let fsk_profile = options.profile();
+    let ofdm_profile = options.ofdm_profile();
+    let routes = if options.robust || options.fsk {
+        vec![PacketPhy::Fsk; plan.packets.len()]
+    } else {
+        hybrid_packet_routes(&plan.packets)
+    };
 
-    let estimated_samples: usize = plan.packets.iter().map(|packet| encode(packet).len()).sum();
+    let estimated_samples: usize = plan
+        .packets
+        .iter()
+        .zip(&routes)
+        .map(|(packet, &route)| hybrid_sample_count(packet.len(), route, fsk_profile, ofdm_profile))
+        .sum();
     let seconds = estimated_samples as f64 / ENCODE_SR as f64;
+    let mode = if options.robust {
+        "FSK Robust"
+    } else if options.fsk {
+        "FSK Fast"
+    } else if options.qam16 {
+        "OFDM fast"
+    } else {
+        "OFDM safe"
+    };
+    if options.qam16 {
+        eprintln!(
+            "warning: --qam16 (differential QPSK) has no frequency diversity and \
+             is unreliable over laptop speakers; drop it to use the default OFDM \
+             mode that is verified over a real acoustic path."
+        );
+    }
     println!(
-        "transfer {:016x}: '{}' ({}), {} bytes, {} packets, ~{seconds:.1}s",
+        "transfer {:016x}: '{}' ({}), {} bytes, {} packets, {mode} lane {}, ~{seconds:.1}s",
         plan.metadata.id,
         plan.metadata.name,
         plan.metadata.content_type,
         plan.metadata.original_size,
         plan.packets.len(),
+        options.lane,
     );
     if plan.metadata.compression != Compression::None {
         println!(
@@ -40,13 +76,22 @@ pub fn run() {
         crate::wav::write_mono(
             path,
             ENCODE_SR,
-            plan.packets.iter().flat_map(|packet| encode(packet)),
+            plan.packets
+                .iter()
+                .zip(&routes)
+                .flat_map(|(packet, &route)| {
+                    encode_hybrid_packet(packet, route, fsk_profile, ofdm_profile)
+                }),
         )
         .unwrap_or_else(|error| fatal(&format!("cannot write WAV: {error}")));
         println!("wrote {path}");
     }
     if options.play {
-        crate::audio::play_packets(&plan.packets);
+        if options.robust || options.fsk {
+            crate::audio::play_packets_profile(&plan.packets, fsk_profile);
+        } else {
+            crate::audio::play_packets_hybrid(&plan.packets, ofdm_profile);
+        }
         println!("done.");
     }
 }
@@ -60,6 +105,10 @@ fn parse_args() -> Options {
         name: None,
         play: true,
         compress: true,
+        robust: false,
+        fsk: false,
+        qam16: false,
+        lane: 0,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -68,16 +117,57 @@ fn parse_args() -> Options {
             "--name" => options.name = Some(required_value(&mut args, &arg)),
             "--no-play" => options.play = false,
             "--no-compress" => options.compress = false,
+            "--robust" => options.robust = true,
+            "--fsk" => options.fsk = true,
+            "--qam16" => options.qam16 = true,
+            "--lane" => {
+                let value = required_value(&mut args, &arg);
+                options.lane = parse_lane(&value);
+            }
             "-h" | "--help" => {
                 println!(
-                    "usage:\n  send \"text\"\n  send text \"text\"\n  send file <path> [--content-type MIME]\n  send stdin --name FILE [--content-type MIME]\n\noptions:\n  -o, --output WAV   additionally write the full transfer to WAV\n  --no-play          do not play through speakers\n  --no-compress      disable automatic zstd compression\n  --name NAME        transmitted file name\n  --content-type MIME"
+                    "usage:\n  send \"text\"\n  send text \"text\"\n  send file <path> [--content-type MIME]\n  send stdin --name FILE [--content-type MIME]\n\noptions:\n  -o, --output WAV   additionally write the full transfer to WAV\n  --lane 0..1        frequency lane for simultaneous pairs\n  --qam16            faster OFDM (differential QPSK) for cleaner channels\n  --fsk              legacy Fast FSK only\n  --robust           legacy Robust FSK for high noise/distance\n  --no-play          do not play through speakers\n  --no-compress      disable automatic zstd compression\n  --name NAME        transmitted file name\n  --content-type MIME"
                 );
                 std::process::exit(0);
             }
             _ => options.positional.push(arg),
         }
     }
+    if [options.robust, options.fsk, options.qam16]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count()
+        > 1
+    {
+        fatal("--robust, --fsk and --qam16 are mutually exclusive");
+    }
     options
+}
+
+impl Options {
+    fn profile(&self) -> AcousticProfile {
+        if self.robust {
+            AcousticProfile::robust(self.lane)
+        } else {
+            AcousticProfile::fast(self.lane)
+        }
+    }
+
+    fn ofdm_profile(&self) -> OfdmProfile {
+        if self.qam16 {
+            OfdmProfile::qam16(self.lane)
+        } else {
+            OfdmProfile::qpsk(self.lane)
+        }
+    }
+}
+
+fn parse_lane(value: &str) -> u8 {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|lane| *lane < MAX_LANES)
+        .unwrap_or_else(|| fatal(&format!("lane must be in 0..{}", MAX_LANES - 1)))
 }
 
 fn required_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {

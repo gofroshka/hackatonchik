@@ -90,14 +90,30 @@ class AcousticAudioService {
         if (events.isNotEmpty) onEvents(events);
       });
     });
-    await _recorder.startRecorder(
-      toStream: _recordController!.sink,
-      codec: Codec.pcm16,
-      numChannels: 1,
-      sampleRate: acousticSampleRate,
-      bufferSize: 8192,
-      audioSource: AudioSource.defaultSource,
-    );
+    // OFDM needs the raw microphone. Android's default source applies AGC,
+    // noise suppression and echo cancellation that destroy the subcarriers, so
+    // request the UNPROCESSED source (falling back to voice recognition, which
+    // also disables that DSP on most devices). iOS relies on the measurement
+    // session mode configured above.
+    try {
+      await _recorder.startRecorder(
+        toStream: _recordController!.sink,
+        codec: Codec.pcm16,
+        numChannels: 1,
+        sampleRate: acousticSampleRate,
+        bufferSize: 8192,
+        audioSource: AudioSource.unprocessed,
+      );
+    } catch (_) {
+      await _recorder.startRecorder(
+        toStream: _recordController!.sink,
+        codec: Codec.pcm16,
+        numChannels: 1,
+        sampleRate: acousticSampleRate,
+        bufferSize: 8192,
+        audioSource: AudioSource.voice_recognition,
+      );
+    }
   }
 
   Future<void> stop() async {

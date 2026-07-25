@@ -1,13 +1,17 @@
 use std::path::Path;
 
 use sonic_share_core::transfer::{build_transfer, detect_content_type};
-use sonic_share_core::{encode, encoded_sample_count, ENCODE_SR};
+use sonic_share_core::{
+    encode_hybrid_packet, hybrid_packet_routes, hybrid_sample_count, AcousticProfile, OfdmProfile,
+    PacketPhy, ENCODE_SR,
+};
 
 use super::types::{TxChunk, TxInfo};
 
 #[flutter_rust_bridge::frb(opaque)]
 pub struct TxSession {
     packets: Vec<Vec<u8>>,
+    routes: Vec<PacketPhy>,
     packet_index: usize,
     current_wave: Vec<f32>,
     current_offset: usize,
@@ -15,31 +19,57 @@ pub struct TxSession {
     total_samples: usize,
     cancelled: bool,
     info: TxInfo,
+    fsk_profile: AcousticProfile,
+    ofdm_profile: OfdmProfile,
 }
 
 impl TxSession {
-    pub fn from_file(path: String, content_type: Option<String>) -> Result<Self, String> {
+    /// Build a transfer from a file. `reliable` selects the slow but robust
+    /// Robust-FSK link; otherwise the faster OFDM link is used.
+    pub fn from_file(
+        path: String,
+        content_type: Option<String>,
+        reliable: bool,
+    ) -> Result<Self, String> {
         let data = std::fs::read(&path).map_err(|error| format!("cannot read file: {error}"))?;
         let name = Path::new(&path)
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("file.bin")
             .to_owned();
-        Self::from_data(name, content_type, data)
+        Self::from_data(name, content_type, data, reliable)
     }
 
+    /// Build a transfer from bytes. `reliable` selects the slow but robust
+    /// Robust-FSK link; otherwise the faster OFDM link is used (with FSK only for
+    /// tiny inline chat frames, handled by the hybrid router transparently).
     pub fn from_data(
         name: String,
         content_type: Option<String>,
         data: Vec<u8>,
+        reliable: bool,
     ) -> Result<Self, String> {
+        let fsk_profile = if reliable {
+            AcousticProfile::robust(0)
+        } else {
+            AcousticProfile::fast(0)
+        };
+        let ofdm_profile = OfdmProfile::qpsk(0);
         let content_type = content_type.unwrap_or_else(|| detect_content_type(&name, &data));
         let plan = build_transfer(&name, &content_type, &data, true)
             .map_err(|error| format!("cannot create transfer: {error}"))?;
+        let routes = if reliable {
+            vec![PacketPhy::Fsk; plan.packets.len()]
+        } else {
+            hybrid_packet_routes(&plan.packets)
+        };
         let total_samples = plan
             .packets
             .iter()
-            .map(|packet| encoded_sample_count(packet.len()))
+            .zip(&routes)
+            .map(|(packet, &route)| {
+                hybrid_sample_count(packet.len(), route, fsk_profile, ofdm_profile)
+            })
             .sum::<usize>();
         let info = TxInfo {
             id: format!("{:016x}", plan.metadata.id),
@@ -52,6 +82,7 @@ impl TxSession {
         };
         Ok(Self {
             packets: plan.packets,
+            routes,
             packet_index: 0,
             current_wave: Vec::new(),
             current_offset: 0,
@@ -59,6 +90,8 @@ impl TxSession {
             total_samples,
             cancelled: false,
             info,
+            fsk_profile,
+            ofdm_profile,
         })
     }
 
@@ -74,7 +107,12 @@ impl TxSession {
                 if self.packet_index >= self.packets.len() {
                     break;
                 }
-                self.current_wave = encode(&self.packets[self.packet_index]);
+                self.current_wave = encode_hybrid_packet(
+                    &self.packets[self.packet_index],
+                    self.routes[self.packet_index],
+                    self.fsk_profile,
+                    self.ofdm_profile,
+                );
                 self.current_offset = 0;
                 self.packet_index += 1;
             }
