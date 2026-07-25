@@ -1,0 +1,12 @@
+[package]
+name = "sonic-share-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+infer = "0.19"
+mime_guess = "2.0"
+reed-solomon = "0.2.1"
+reed-solomon-erasure = "6.0"
+sha2 = "0.10"
+zstd = "0.13"
