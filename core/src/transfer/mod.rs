@@ -14,7 +14,7 @@ pub use packet::{
     TYPE_HANDSHAKE_REQ,
 };
 pub use receiver::TransferReceiver;
-pub use sender::build_transfer;
+pub use sender::{build_transfer, build_transfer_encrypted};
 pub use types::{Compression, TransferError, TransferEvent, TransferMetadata, TransferPlan};
 
 #[cfg(test)]

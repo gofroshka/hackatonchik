@@ -3,6 +3,7 @@
 //! Frames use exact FFT-bin tones, a marker preamble, repeated synchronization
 //! and length bytes, Reed-Solomon protection, and a CRC-8 checksum.
 
+pub mod crypto;
 mod decoder;
 mod detector;
 mod diagnostics;

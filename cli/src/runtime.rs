@@ -6,14 +6,18 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use sonic_share_core::crypto;
 use sonic_share_core::detect_tone;
 use sonic_share_core::output::save_received;
 use sonic_share_core::tone;
 use sonic_share_core::transfer::{
-    build_transfer, detect_content_type, is_chat_content_type, TransferEvent, TransferReceiver,
+    build_transfer, build_transfer_encrypted, detect_content_type, encode_handshake_ack,
+    encode_handshake_req, is_chat_content_type, TransferEvent, TransferReceiver,
 };
-use sonic_share_core::Decoder;
-use sonic_share_core::{F_HANDSHAKE_ACK, F_HANDSHAKE_REQ, F_END_ACK, HANDSHAKE_TONE_SECS};
+use sonic_share_core::{encode, Decoder};
+use sonic_share_core::{
+    F_HANDSHAKE_ACK, F_HANDSHAKE_REQ, F_END_ACK, HANDSHAKE_TONE_SECS,
+};
 
 const CHAT_CONTENT_TYPE: &str = "text/x-sonic-chat; charset=utf-8";
 const PCM_QUEUE_CAPACITY: usize = 8;
@@ -165,24 +169,41 @@ fn send_payload(
     events: &mpsc::Sender<RuntimeEvent>,
     shutdown: &AtomicBool,
 ) -> Result<(), String> {
-    let plan = build_transfer(name, content_type, data, true)
-        .map_err(|error| format!("cannot build transfer: {error}"))?;
-    let total = plan.packets.len();
-
     let _ = events.send(RuntimeEvent::Status("Handshake…".to_owned()));
     let handshake_ok = do_tone_handshake(F_HANDSHAKE_REQ, F_HANDSHAKE_ACK, 6, events, shutdown);
 
-    if handshake_ok {
+    let session_key = if handshake_ok {
         let _ = events.send(RuntimeEvent::Status("Handshake OK!".to_owned()));
+        match do_key_exchange_sender(events, shutdown) {
+            Some(key) => {
+                let _ = events
+                    .send(RuntimeEvent::Status("Encrypted session established!".to_owned()));
+                Some(key)
+            }
+            None => {
+                let _ = events.send(RuntimeEvent::Status(
+                    "No key exchange response, sending unencrypted…".to_owned(),
+                ));
+                None
+            }
+        }
     } else {
         let _ = events.send(RuntimeEvent::Status(
             "No handshake response, sending anyway…".to_owned(),
         ));
-    }
+        None
+    };
 
+    let plan = match &session_key {
+        Some(key) => build_transfer_encrypted(name, content_type, data, true, key)
+            .map_err(|error| format!("cannot build encrypted transfer: {error}"))?,
+        None => build_transfer(name, content_type, data, true)
+            .map_err(|error| format!("cannot build transfer: {error}"))?,
+    };
+    let total = plan.packets.len();
     let _ = events.send(RuntimeEvent::Status(format!(
-        "Sending '{}' in {total} packet(s)",
-        plan.metadata.name
+        "Sending '{}' ({}) in {total} packet(s)",
+        plan.metadata.name, plan.metadata.content_type,
     )));
     let _ = events.send(RuntimeEvent::TxStarted);
     crate::audio::play_packets_cancellable(&plan.packets, shutdown, |current, total| {
@@ -198,6 +219,142 @@ fn send_payload(
         "Transmission complete (no confirmation)".to_owned()
     }));
     Ok(())
+}
+
+/// Perform cryptographic key exchange after the tone handshake succeeds.
+///
+/// 1. Generate X25519 keypair.
+/// 2. Encode & play `HandshakeReq` packet with our public key.
+/// 3. Listen for `HandshakeAck` event with the receiver's public key.
+/// 4. Derive shared AES-256-GCM session key.
+///
+/// Returns `None` on timeout.
+fn do_key_exchange_sender(
+    events: &mpsc::Sender<RuntimeEvent>,
+    shutdown: &AtomicBool,
+) -> Option<[u8; crypto::KEY_LEN]> {
+    for attempt in 0..4 {
+        if shutdown.load(Ordering::Relaxed) {
+            return None;
+        }
+        let _ = events.send(RuntimeEvent::Status(format!(
+            "Key exchange attempt {}/{}",
+            attempt + 1,
+            4
+        )));
+
+        let kp = crypto::generate_keypair();
+        let req_packet = encode_handshake_req(0, &kp.public);
+        let waveform = encode(&req_packet);
+        if !play_waveform(&waveform, shutdown) {
+            continue;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let peer_pubkey = listen_for_handshake_ack(2000, shutdown);
+        if let Some(peer_pubkey) = peer_pubkey {
+            let session_key = crypto::derive_session_key(kp, &peer_pubkey);
+            let _ = events.send(RuntimeEvent::Status("Key exchange succeeded!".to_owned()));
+            return Some(session_key);
+        }
+    }
+    None
+}
+
+/// Listen for a `HandshakeAck` transfer event and return the peer's public key.
+fn listen_for_handshake_ack(
+    timeout_ms: u64,
+    shutdown: &AtomicBool,
+) -> Option<[u8; crypto::KEY_LEN]> {
+    let device = cpal::default_host().default_input_device()?;
+    let config = device.default_input_config().ok()?;
+    let sample_rate = config.sample_rate().0;
+    let mut decoder = Decoder::new(sample_rate);
+    let mut transfers = TransferReceiver::new();
+    let result = std::sync::Arc::new(std::sync::Mutex::new(None::<[u8; crypto::KEY_LEN]>));
+    let result_clone = std::sync::Arc::clone(&result);
+    use std::sync::atomic::AtomicBool;
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let done_clone = std::sync::Arc::clone(&done);
+
+    let stream = crate::audio::build_mono_input_stream_fallible(
+        &device,
+        &config,
+        move |samples| {
+            if done_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            decoder.push(&samples);
+            while let Some(payload) = decoder.poll() {
+                for event in transfers.ingest(&payload) {
+                    if let TransferEvent::HandshakeAck { pubkey, .. } = event {
+                        *result_clone.lock().unwrap() = Some(pubkey);
+                        done_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                        return;
+                    }
+                }
+            }
+        },
+        |_| {},
+    )
+    .ok()?;
+    let _ = stream.play();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_millis(timeout_ms) {
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        if done.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    drop(stream);
+    let mut guard = result.lock().unwrap();
+    guard.take()
+}
+
+/// Play a raw waveform through the speaker.
+fn play_waveform(samples: &[f32], _shutdown: &AtomicBool) -> bool {
+    use cpal::traits::DeviceTrait;
+    let host = cpal::default_host();
+    let device = match host.default_output_device() {
+        Some(d) => d,
+        None => return false,
+    };
+    let config = match device.default_output_config() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let resampled = crate::audio::resample(samples, 48000, config.sample_rate().0);
+    let channels = config.channels() as usize;
+    let (tx, rx): (std::sync::mpsc::SyncSender<Vec<f32>>, _) = std::sync::mpsc::sync_channel(2);
+    let resampled_clone = resampled.clone();
+    let stream = match device
+        .build_output_stream(
+            &config.clone().into(),
+            move |buffer: &mut [f32], _| {
+                if let Ok(chunk) = rx.try_recv() {
+                    for (frame, &value) in buffer.chunks_mut(channels).zip(chunk.iter()) {
+                        for slot in frame {
+                            *slot = value;
+                        }
+                    }
+                }
+            },
+            |_| {},
+            None,
+        ) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let _ = stream.play();
+    let _ = tx.send(resampled);
+    std::thread::sleep(std::time::Duration::from_secs_f32(
+        resampled_clone.len() as f32 / config.sample_rate().0 as f32 + 0.1,
+    ));
+    drop(stream);
+    true
 }
 
 fn play_tone_pcm(frequency: f32) -> Vec<f32> {
@@ -465,15 +622,37 @@ fn rx_loop(
             active_decoder.push(&chunk);
             while let Some(packet) = active_decoder.poll() {
                 for event in transfers.ingest(&packet) {
-                    let is_start = matches!(event, TransferEvent::Started { .. });
-                    let is_end = matches!(
-                        event,
-                        TransferEvent::Completed { .. } | TransferEvent::Failed { .. }
-                    );
-                    if is_start {
-                        transfer_active = true;
-                    } else if is_end {
-                        transfer_active = false;
+                    match &event {
+                        TransferEvent::HandshakeRequest { pubkey, .. } => {
+                            if transfers.has_session_key() {
+                                continue;
+                            }
+                            let _ = events.send(RuntimeEvent::Status(
+                                "Key exchange request received, generating response…".to_owned(),
+                            ));
+                            let kp = crypto::generate_keypair();
+                            let our_pubkey = kp.public;
+                            let session_key = crypto::derive_session_key(kp, pubkey);
+                            transfers.set_session_key(session_key);
+                            let _ = events.send(RuntimeEvent::Status(
+                                "Encrypted session established!".to_owned(),
+                            ));
+                            let ack_packet = encode_handshake_ack(0, &our_pubkey);
+                            let ack_wave = encode(&ack_packet);
+                            let _ = play_waveform(&ack_wave, &shutdown);
+                        }
+                        _ => {
+                            let is_start = matches!(event, TransferEvent::Started { .. });
+                            let is_end = matches!(
+                                event,
+                                TransferEvent::Completed { .. } | TransferEvent::Failed { .. }
+                            );
+                            if is_start {
+                                transfer_active = true;
+                            } else if is_end {
+                                transfer_active = false;
+                            }
+                        }
                     }
                     for event in classify_transfer_event(event, &output_dir) {
                         let _ = events.send(event);
@@ -544,10 +723,10 @@ fn classify_transfer_event(event: TransferEvent, output_dir: &Path) -> Vec<Runti
         TransferEvent::Failed { id, reason } => vec![RuntimeEvent::Error(format!(
             "transfer {id:016x} failed: {reason}"
         ))],
-        TransferEvent::HandshakeRequest { id } => {
+        TransferEvent::HandshakeRequest { id, .. } => {
             vec![RuntimeEvent::Status(format!("handshake request {id:016x}"))]
         }
-        TransferEvent::HandshakeAck { id } => {
+        TransferEvent::HandshakeAck { id, .. } => {
             vec![RuntimeEvent::Status(format!("handshake ack {id:016x}"))]
         }
         TransferEvent::EndAck { id } => {

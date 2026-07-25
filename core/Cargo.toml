@@ -4,9 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+aes-gcm = "0.10"
 infer = "0.19"
 mime_guess = "2.0"
+rand = "0.8"
 reed-solomon = "0.2.1"
 reed-solomon-erasure = "6.0"
 sha2 = "0.10"
+x25519-dalek = "2"
 zstd = "0.13"

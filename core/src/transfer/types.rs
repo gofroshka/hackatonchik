@@ -59,9 +59,11 @@ pub enum TransferEvent {
     },
     HandshakeRequest {
         id: u64,
+        pubkey: [u8; 32],
     },
     HandshakeAck {
         id: u64,
+        pubkey: [u8; 32],
     },
     EndAck {
         id: u64,

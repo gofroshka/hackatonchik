@@ -1,3 +1,4 @@
+use crate::crypto::KEY_LEN;
 use crate::MAX_PAYLOAD;
 
 use super::geometry::{shard_geometry, SHARD_SIZE};
@@ -36,9 +37,11 @@ pub(super) enum Packet {
     },
     HandshakeReq {
         id: u64,
+        pubkey: [u8; KEY_LEN],
     },
     HandshakeAck {
         id: u64,
+        pubkey: [u8; KEY_LEN],
     },
     EndAck {
         id: u64,
@@ -95,15 +98,17 @@ pub(super) fn encode_end(metadata: &TransferMetadata) -> Vec<u8> {
     output
 }
 
-pub fn encode_handshake_req(id: u64) -> Vec<u8> {
-    let mut output = Vec::with_capacity(COMMON_HEADER);
+pub fn encode_handshake_req(id: u64, pubkey: &[u8; KEY_LEN]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(COMMON_HEADER + KEY_LEN);
     encode_common(TYPE_HANDSHAKE_REQ, id, &mut output);
+    output.extend_from_slice(pubkey);
     output
 }
 
-pub fn encode_handshake_ack(id: u64) -> Vec<u8> {
-    let mut output = Vec::with_capacity(COMMON_HEADER);
+pub fn encode_handshake_ack(id: u64, pubkey: &[u8; KEY_LEN]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(COMMON_HEADER + KEY_LEN);
     encode_common(TYPE_HANDSHAKE_ACK, id, &mut output);
+    output.extend_from_slice(pubkey);
     output
 }
 
@@ -240,12 +245,20 @@ pub(super) fn decode_packet(data: &[u8]) -> Result<Packet, TransferError> {
                 })
             }
             TYPE_HANDSHAKE_REQ => {
+                let pubkey = cursor
+                    .take(KEY_LEN)?
+                    .try_into()
+                    .map_err(|_| TransferError::Malformed("bad pubkey"))?;
                 cursor.finish()?;
-                Ok(Packet::HandshakeReq { id })
+                Ok(Packet::HandshakeReq { id, pubkey })
             }
             TYPE_HANDSHAKE_ACK => {
+                let pubkey = cursor
+                    .take(KEY_LEN)?
+                    .try_into()
+                    .map_err(|_| TransferError::Malformed("bad pubkey"))?;
                 cursor.finish()?;
-                Ok(Packet::HandshakeAck { id })
+                Ok(Packet::HandshakeAck { id, pubkey })
             }
             TYPE_END_ACK => {
                 cursor.finish()?;

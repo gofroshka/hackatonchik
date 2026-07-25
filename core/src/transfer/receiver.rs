@@ -4,6 +4,8 @@ use std::io::Cursor;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
 
+use crate::crypto;
+
 use super::geometry::{shard_geometry, SHARD_SIZE};
 use super::packet::{decode_packet, Packet};
 use super::types::{Compression, TransferEvent, TransferMetadata};
@@ -15,14 +17,30 @@ struct IncomingTransfer {
     completed: HashMap<u32, Vec<u8>>,
 }
 
-#[derive(Default)]
 pub struct TransferReceiver {
     incoming: HashMap<u64, IncomingTransfer>,
+    session_key: Option<[u8; crypto::KEY_LEN]>,
 }
 
 impl TransferReceiver {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            incoming: HashMap::new(),
+            session_key: None,
+        }
+    }
+
+    /// Set the AES-256-GCM session key for decrypting incoming transfers.
+    ///
+    /// Must be set *before* data packets arrive (e.g. after completing the
+    /// handshake key exchange).
+    pub fn set_session_key(&mut self, key: [u8; crypto::KEY_LEN]) {
+        self.session_key = Some(key);
+    }
+
+    /// Returns `true` if a session key has been set via [`set_session_key`].
+    pub fn has_session_key(&self) -> bool {
+        self.session_key.is_some()
     }
 
     pub fn ingest(&mut self, payload: &[u8]) -> Vec<TransferEvent> {
@@ -41,7 +59,19 @@ impl TransferReceiver {
             Packet::End { id, sha256 } => self.ingest_end(id, sha256),
             Packet::Inline { metadata, encoded } => {
                 let id = metadata.id;
-                match decode_content(&metadata, encoded) {
+                let decrypted = match &self.session_key {
+                    Some(key) => match crypto::decrypt(&encoded, key) {
+                        Ok(data) => data,
+                        Err(error) => {
+                            return vec![TransferEvent::Failed {
+                                id,
+                                reason: format!("decryption failed: {error}"),
+                            }];
+                        }
+                    },
+                    None => encoded,
+                };
+                match decode_content(&metadata, decrypted) {
                     Ok(data) => vec![
                         TransferEvent::Started(metadata.clone()),
                         TransferEvent::Completed { metadata, data },
@@ -49,11 +79,11 @@ impl TransferReceiver {
                     Err(reason) => vec![TransferEvent::Failed { id, reason }],
                 }
             }
-            Packet::HandshakeReq { id } => {
-                vec![TransferEvent::HandshakeRequest { id }]
+            Packet::HandshakeReq { id, pubkey } => {
+                vec![TransferEvent::HandshakeRequest { id, pubkey }]
             }
-            Packet::HandshakeAck { id } => {
-                vec![TransferEvent::HandshakeAck { id }]
+            Packet::HandshakeAck { id, pubkey } => {
+                vec![TransferEvent::HandshakeAck { id, pubkey }]
             }
             Packet::EndAck { id } => {
                 vec![TransferEvent::EndAck { id }]
@@ -177,7 +207,19 @@ impl TransferReceiver {
             }
         };
         encoded.truncate(encoded_size);
-        match decode_content(&transfer.metadata, encoded) {
+        let decrypted = match &self.session_key {
+            Some(key) => match crypto::decrypt(&encoded, key) {
+                Ok(data) => data,
+                Err(error) => {
+                    return vec![TransferEvent::Failed {
+                        id,
+                        reason: format!("decryption failed: {error}"),
+                    }];
+                }
+            },
+            None => encoded,
+        };
+        match decode_content(&transfer.metadata, decrypted) {
             Ok(data) => vec![TransferEvent::Completed {
                 metadata: transfer.metadata,
                 data,

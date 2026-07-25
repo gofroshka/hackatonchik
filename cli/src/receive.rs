@@ -240,10 +240,10 @@ fn handle_events(events: Vec<TransferEvent>, output_dir: &Path, style: OutputSty
             TransferEvent::Failed { id, reason } => {
                 eprintln!("transfer {id:016x} failed: {reason}");
             }
-            TransferEvent::HandshakeRequest { id } => {
+            TransferEvent::HandshakeRequest { id, .. } => {
                 println!("handshake request {id:016x}");
             }
-            TransferEvent::HandshakeAck { id } => {
+            TransferEvent::HandshakeAck { id, .. } => {
                 println!("handshake ack {id:016x}");
             }
             TransferEvent::EndAck { id } => {
