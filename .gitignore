@@ -1,23 +1,40 @@
-# Operating systems
-.DS_Store
-Thumbs.db
+# Secrets and local configuration
+.env
+*.key
+*.pem
 
-# Editors and IDEs
+# Editors and operating systems
+.DS_Store
 .idea/
-*.iml
-*.ipr
-*.iws
 .vscode/
 *.swp
 *.swo
 *~
+Thumbs.db
+*.iml
+*.ipr
+*.iws
 
-# Logs, local configuration, and secrets
+# Logs and temporary files
 *.log
-.env
-.env.*
-!.env.example
-*.local
+tmp/
+temp/
+
+# Generic build output
+build/
+dist/
+out/
+target/
+bin/
+obj/
+
+# Dependencies and caches
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.gradle/
 
 # Rust
 /target/
@@ -58,7 +75,17 @@ Thumbs.db
 **/*.xcuserstate
 
 # Local transfer and diagnostic output
-**/received/
-**/received-fast/
+received/
+received-fast/
 *.wav
 *.pcm
+
+# Examples output
+examples/output/*
+!examples/output/.gitkeep
+
+# Large demo media
+artifacts/demo/*.mp4
+artifacts/demo/*.mov
+artifacts/demo/*.mkv
+artifacts/demo/*.wav

@@ -5,11 +5,11 @@
 Run from the repository root:
 
 ```bash
-cargo run -p sonic-share-cli --bin bench-assets -- assets
+cargo run -p sonic-share-cli --bin bench-assets -- artifacts/test-assets
 ```
 
 This verifies complete transfer/FEC/SHA reconstruction for every file in
-`assets/`, sends representative packets through Fast FSK, and sends every packet
+`artifacts/test-assets/`, sends representative packets through Fast FSK, and sends every packet
 through hybrid OFDM QPSK without waiting for real-time playback. It also checks
 the 20 KB OFDM airtime targets.
 
@@ -38,7 +38,7 @@ Use Robust on both devices:
 cargo run -p sonic-share-cli --bin listen -- --robust --lane 0
 
 # sender
-cargo run -p sonic-share-cli --bin send -- file assets/1kb.txt --robust --lane 0
+cargo run -p sonic-share-cli --bin send -- file artifacts/test-assets/1kb.txt --robust --lane 0
 ```
 
 Record the following in the demo video:
@@ -60,11 +60,11 @@ Assign a different lane to each pair:
 ```bash
 # pair A
 cargo run -p sonic-share-cli --bin listen -- --lane 0
-cargo run -p sonic-share-cli --bin send -- file assets/1kb.txt --lane 0
+cargo run -p sonic-share-cli --bin send -- file artifacts/test-assets/1kb.txt --lane 0
 
 # pair B
 cargo run -p sonic-share-cli --bin listen -- --lane 1
-cargo run -p sonic-share-cli --bin send -- file assets/2kb.txt --lane 1
+cargo run -p sonic-share-cli --bin send -- file artifacts/test-assets/2kb.txt --lane 1
 ```
 
 Start both senders together. Place every sender and its receiver no farther
@@ -78,7 +78,7 @@ Physical loopback was run on the built-in MacBook Air speakers and microphone at
 48 kHz. The default `OFDM safe` mode transfers files end-to-end with byte-exact
 SHA-256 verification:
 
-- `assets/1kb.txt` (1 group, 10 packets): received and SHA-256 verified.
+- `artifacts/test-assets/1kb.txt` (1 group, 10 packets): received and SHA-256 verified.
 - 2500-byte incompressible file (2 groups, 27 packets): both groups
   reconstructed and SHA-256 verified.
 

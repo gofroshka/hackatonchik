@@ -14,7 +14,7 @@ fn main() {
     let assets = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("assets"));
+        .unwrap_or_else(|| PathBuf::from("artifacts/test-assets"));
     if let Err(error) = run(&assets) {
         eprintln!("asset benchmark failed: {error}");
         std::process::exit(1);

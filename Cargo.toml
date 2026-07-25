@@ -1,6 +1,6 @@
 [workspace]
-members = ["core", "cli", "mobile/rust"]
-default-members = ["core", "cli"]
+members = ["src/core", "src/cli", "src/mobile/rust"]
+default-members = ["src/core", "src/cli"]
 resolver = "2"
 
 [workspace.package]
@@ -8,4 +8,4 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-sonic-share-core = { path = "core" }
+sonic-share-core = { path = "src/core" }
