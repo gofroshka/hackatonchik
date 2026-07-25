@@ -2,7 +2,7 @@ use std::path::Path;
 
 use sonic_share_core::output::save_received;
 use sonic_share_core::transfer::{is_chat_content_type, TransferEvent, TransferReceiver};
-use sonic_share_core::{AcousticProfile, Decoder, HybridDecoder, OfdmProfile, MAX_LANES};
+use sonic_share_core::{AcousticProfile, Decoder, HybridDecoder, OfdmProfile};
 
 use super::types::MobileReceiveEvent;
 
@@ -35,36 +35,26 @@ impl MobileDecoder {
 }
 
 impl RxSession {
-    pub fn new(sample_rate: u32, output_dir: String) -> Self {
-        Self::new_with_profile(sample_rate, output_dir, false, 0)
-            .expect("default acoustic profile is valid")
-    }
-
-    pub fn new_with_profile(
-        sample_rate: u32,
-        output_dir: String,
-        robust: bool,
-        lane: u8,
-    ) -> Result<Self, String> {
-        if lane >= MAX_LANES {
-            return Err(format!("lane must be in 0..{}", MAX_LANES - 1));
-        }
-        let decoder = if robust {
+    /// Start receiving. `reliable` selects the slow but robust Robust-FSK link;
+    /// otherwise the faster OFDM link is used (with FSK only for tiny inline chat
+    /// frames, handled transparently by `HybridDecoder`).
+    pub fn new(sample_rate: u32, output_dir: String, reliable: bool) -> Self {
+        let decoder = if reliable {
             MobileDecoder::Fsk(Decoder::with_profile(
                 sample_rate,
-                AcousticProfile::robust(lane),
+                AcousticProfile::robust(0),
             ))
         } else {
             MobileDecoder::Hybrid(HybridDecoder::with_sample_rate(
                 sample_rate,
-                OfdmProfile::qpsk(lane),
+                OfdmProfile::qpsk(0),
             ))
         };
-        Ok(Self {
+        Self {
             decoder,
             transfers: TransferReceiver::new(),
             output_dir,
-        })
+        }
     }
 
     pub fn push_pcm16(&mut self, pcm16_le: Vec<u8>) -> Vec<MobileReceiveEvent> {

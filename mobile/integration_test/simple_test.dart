@@ -13,6 +13,7 @@ void main() {
       name: 'test.txt',
       contentType: 'text/plain',
       data: 'hello'.codeUnits,
+      reliable: false,
     );
     final info = await tx.info();
     expect(info.name, 'test.txt');

@@ -70,34 +70,27 @@ class _ProfileSelector extends StatelessWidget {
   final SonicController controller;
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Expanded(
-        child: SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(value: false, label: Text('OFDM')),
-            ButtonSegment(value: true, label: Text('Robust FSK')),
-          ],
-          selected: {controller.robustProfile},
-          onSelectionChanged: controller.isBusy
-              ? null
-              : (value) => controller.setRobustProfile(value.first),
-          showSelectedIcon: false,
+  Widget build(BuildContext context) => SizedBox(
+    width: double.infinity,
+    child: SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment(
+          value: false,
+          label: Text('Быстро'),
+          icon: Icon(Icons.bolt_rounded),
         ),
-      ),
-      const SizedBox(width: 10),
-      SegmentedButton<int>(
-        segments: const [
-          ButtonSegment(value: 0, label: Text('L0')),
-          ButtonSegment(value: 1, label: Text('L1')),
-        ],
-        selected: {controller.acousticLane},
-        onSelectionChanged: controller.isBusy
-            ? null
-            : (value) => controller.setAcousticLane(value.first),
-        showSelectedIcon: false,
-      ),
-    ],
+        ButtonSegment(
+          value: true,
+          label: Text('Надёжно'),
+          icon: Icon(Icons.shield_rounded),
+        ),
+      ],
+      selected: {controller.reliableMode},
+      onSelectionChanged: controller.isBusy
+          ? null
+          : (value) => controller.setReliableMode(value.first),
+      showSelectedIcon: false,
+    ),
   );
 }
 

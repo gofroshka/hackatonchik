@@ -3,7 +3,7 @@ use std::path::Path;
 use sonic_share_core::transfer::{build_transfer, detect_content_type};
 use sonic_share_core::{
     encode_hybrid_packet, hybrid_packet_routes, hybrid_sample_count, AcousticProfile, OfdmProfile,
-    PacketPhy, ENCODE_SR, MAX_LANES,
+    PacketPhy, ENCODE_SR,
 };
 
 use super::types::{TxChunk, TxInfo};
@@ -24,15 +24,12 @@ pub struct TxSession {
 }
 
 impl TxSession {
-    pub fn from_file(path: String, content_type: Option<String>) -> Result<Self, String> {
-        Self::from_file_with_profile(path, content_type, false, 0)
-    }
-
-    pub fn from_file_with_profile(
+    /// Build a transfer from a file. `reliable` selects the slow but robust
+    /// Robust-FSK link; otherwise the faster OFDM link is used.
+    pub fn from_file(
         path: String,
         content_type: Option<String>,
-        robust: bool,
-        lane: u8,
+        reliable: bool,
     ) -> Result<Self, String> {
         let data = std::fs::read(&path).map_err(|error| format!("cannot read file: {error}"))?;
         let name = Path::new(&path)
@@ -40,37 +37,28 @@ impl TxSession {
             .and_then(|value| value.to_str())
             .unwrap_or("file.bin")
             .to_owned();
-        Self::from_data_with_profile(name, content_type, data, robust, lane)
+        Self::from_data(name, content_type, data, reliable)
     }
 
+    /// Build a transfer from bytes. `reliable` selects the slow but robust
+    /// Robust-FSK link; otherwise the faster OFDM link is used (with FSK only for
+    /// tiny inline chat frames, handled by the hybrid router transparently).
     pub fn from_data(
         name: String,
         content_type: Option<String>,
         data: Vec<u8>,
+        reliable: bool,
     ) -> Result<Self, String> {
-        Self::from_data_with_profile(name, content_type, data, false, 0)
-    }
-
-    pub fn from_data_with_profile(
-        name: String,
-        content_type: Option<String>,
-        data: Vec<u8>,
-        robust: bool,
-        lane: u8,
-    ) -> Result<Self, String> {
-        if lane >= MAX_LANES {
-            return Err(format!("lane must be in 0..{}", MAX_LANES - 1));
-        }
-        let fsk_profile = if robust {
-            AcousticProfile::robust(lane)
+        let fsk_profile = if reliable {
+            AcousticProfile::robust(0)
         } else {
-            AcousticProfile::fast(lane)
+            AcousticProfile::fast(0)
         };
-        let ofdm_profile = OfdmProfile::qpsk(lane);
+        let ofdm_profile = OfdmProfile::qpsk(0);
         let content_type = content_type.unwrap_or_else(|| detect_content_type(&name, &data));
         let plan = build_transfer(&name, &content_type, &data, true)
             .map_err(|error| format!("cannot create transfer: {error}"))?;
-        let routes = if robust {
+        let routes = if reliable {
             vec![PacketPhy::Fsk; plan.packets.len()]
         } else {
             hybrid_packet_routes(&plan.packets)
