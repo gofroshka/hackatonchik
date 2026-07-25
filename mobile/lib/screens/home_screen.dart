@@ -33,6 +33,8 @@ class HomeScreen extends StatelessWidget {
                     const _Header(),
                     const SizedBox(height: 28),
                     _ModeSelector(controller: controller),
+                    const SizedBox(height: 12),
+                    _ProfileSelector(controller: controller),
                     const SizedBox(height: 28),
                     AnimatedSwitcher(
                       duration: const Duration(milliseconds: 320),
@@ -60,6 +62,43 @@ class HomeScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProfileSelector extends StatelessWidget {
+  const _ProfileSelector({required this.controller});
+
+  final SonicController controller;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(value: false, label: Text('OFDM')),
+            ButtonSegment(value: true, label: Text('Robust FSK')),
+          ],
+          selected: {controller.robustProfile},
+          onSelectionChanged: controller.isBusy
+              ? null
+              : (value) => controller.setRobustProfile(value.first),
+          showSelectedIcon: false,
+        ),
+      ),
+      const SizedBox(width: 10),
+      SegmentedButton<int>(
+        segments: const [
+          ButtonSegment(value: 0, label: Text('L0')),
+          ButtonSegment(value: 1, label: Text('L1')),
+        ],
+        selected: {controller.acousticLane},
+        onSelectionChanged: controller.isBusy
+            ? null
+            : (value) => controller.setAcousticLane(value.first),
+        showSelectedIcon: false,
+      ),
+    ],
+  );
 }
 
 class _Header extends StatelessWidget {
@@ -124,7 +163,7 @@ class _ProtocolBadge extends StatelessWidget {
         color: const Color(0x1243E6D1),
       ),
       child: const Text(
-        'RS + FEC',
+        'OFDM + FEC',
         style: TextStyle(color: Color(0xFF43E6D1), fontSize: 11),
       ),
     );

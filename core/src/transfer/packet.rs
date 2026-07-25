@@ -14,6 +14,27 @@ const COMMON_HEADER: usize = 4 + 1 + 1 + 8;
 pub(super) const MANIFEST_FIXED: usize = COMMON_HEADER + 1 + 8 + 8 + 32 + 2 + 1 + 1 + 4 + 1 + 1;
 pub(super) const INLINE_FIXED: usize = COMMON_HEADER + 1 + 8 + 8 + 32 + 1 + 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferPacketKind {
+    Manifest,
+    Shard,
+    End,
+    Inline,
+}
+
+pub fn classify_packet(data: &[u8]) -> Option<TransferPacketKind> {
+    if data.len() < COMMON_HEADER || &data[..4] != MAGIC || data[4] != VERSION {
+        return None;
+    }
+    match data[5] {
+        TYPE_MANIFEST => Some(TransferPacketKind::Manifest),
+        TYPE_SHARD => Some(TransferPacketKind::Shard),
+        TYPE_END => Some(TransferPacketKind::End),
+        TYPE_INLINE => Some(TransferPacketKind::Inline),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum Packet {
     Manifest(TransferMetadata),

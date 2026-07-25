@@ -4,7 +4,7 @@ use std::sync::mpsc::channel;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use sonic_share_core::output::save_received;
 use sonic_share_core::transfer::{is_chat_content_type, TransferEvent, TransferReceiver};
-use sonic_share_core::Decoder;
+use sonic_share_core::{AcousticProfile, Decoder, HybridDecoder, OfdmProfile, MAX_LANES};
 
 #[derive(Clone, Copy)]
 enum OutputStyle {
@@ -12,8 +12,71 @@ enum OutputStyle {
     Decode,
 }
 
+#[derive(Clone, Copy)]
+enum ReceiveMode {
+    Fsk(AcousticProfile),
+    Hybrid(OfdmProfile),
+}
+
+enum LinkDecoder {
+    Fsk(Decoder),
+    Hybrid(HybridDecoder),
+}
+
+impl ReceiveMode {
+    fn decoder(self, sample_rate: u32) -> LinkDecoder {
+        match self {
+            Self::Fsk(profile) => LinkDecoder::Fsk(Decoder::with_profile(sample_rate, profile)),
+            Self::Hybrid(profile) => {
+                LinkDecoder::Hybrid(HybridDecoder::with_sample_rate(sample_rate, profile))
+            }
+        }
+    }
+
+    fn lane(self) -> u8 {
+        match self {
+            Self::Fsk(profile) => profile.lane(),
+            Self::Hybrid(profile) => profile.lane(),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Fsk(profile) if matches!(profile.mode(), sonic_share_core::PhyMode::Robust) => {
+                "FSK Robust"
+            }
+            Self::Fsk(_) => "FSK Fast",
+            Self::Hybrid(profile)
+                if matches!(
+                    profile.modulation(),
+                    sonic_share_core::OfdmModulation::Qam16
+                ) =>
+            {
+                "OFDM fast"
+            }
+            Self::Hybrid(_) => "OFDM safe",
+        }
+    }
+}
+
+impl LinkDecoder {
+    fn push(&mut self, samples: &[f32]) {
+        match self {
+            Self::Fsk(decoder) => decoder.push(samples),
+            Self::Hybrid(decoder) => decoder.push(samples),
+        }
+    }
+
+    fn poll(&mut self) -> Option<Vec<u8>> {
+        match self {
+            Self::Fsk(decoder) => decoder.poll(),
+            Self::Hybrid(decoder) => decoder.poll(),
+        }
+    }
+}
+
 pub fn run_listen() {
-    let output_dir = listen_output_directory();
+    let (output_dir, mode) = listen_options();
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -32,8 +95,10 @@ pub fn run_listen() {
         config.sample_format()
     );
     println!(
-        "listening... files are saved to '{}'; chat messages are printed here. Ctrl-C to stop.\n",
-        output_dir.display()
+        "listening on {} lane {}... files are saved to '{}'; chat messages are printed here. Ctrl-C to stop.\n",
+        mode.name(),
+        mode.lane(),
+        output_dir.display(),
     );
 
     let (tx, rx) = channel::<Vec<f32>>();
@@ -43,7 +108,7 @@ pub fn run_listen() {
     stream.play().expect("failed to start stream");
 
     let debug = std::env::var("DEBUG").is_ok();
-    let mut decoder = Decoder::new(sample_rate);
+    let mut decoder = mode.decoder(sample_rate);
     let mut transfers = TransferReceiver::new();
     let mut since_report = 0usize;
     let mut peak = 0.0f32;
@@ -74,7 +139,7 @@ pub fn run_listen() {
 }
 
 pub fn run_decode() {
-    let (path, output_dir) = decode_args();
+    let (path, output_dir, mode) = decode_args();
     let wav = crate::wav::read_mono(&path).unwrap_or_else(|error| {
         eprintln!("cannot open '{}': {error}", path.display());
         std::process::exit(2);
@@ -93,30 +158,31 @@ pub fn run_decode() {
 
     let mut receiver = TransferReceiver::new();
     let mut completed = 0usize;
-    if std::env::var("STREAM").is_ok() {
-        let chunk = std::env::var("CHUNK")
+    let chunk = if std::env::var("STREAM").is_ok() {
+        std::env::var("CHUNK")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(512usize);
-        let mut decoder = Decoder::new(wav.sample_rate);
-        for samples in wav.samples.chunks(chunk) {
-            decoder.push(samples);
-            while let Some(packet) = decoder.poll() {
-                completed +=
-                    handle_events(receiver.ingest(&packet), &output_dir, OutputStyle::Decode);
-            }
-        }
+            .unwrap_or(512usize)
     } else {
-        for packet in sonic_share_core::decode_all(wav.sample_rate, &wav.samples) {
+        wav.samples.len().max(1)
+    };
+    let mut decoder = mode.decoder(wav.sample_rate);
+    for samples in wav.samples.chunks(chunk) {
+        decoder.push(samples);
+        while let Some(packet) = decoder.poll() {
             completed += handle_events(receiver.ingest(&packet), &output_dir, OutputStyle::Decode);
         }
     }
     println!("completed transfers: {completed}");
 }
 
-fn listen_output_directory() -> PathBuf {
+fn listen_options() -> (PathBuf, ReceiveMode) {
     let mut args = std::env::args().skip(1);
     let mut output = PathBuf::from("received");
+    let mut robust = false;
+    let mut fsk = false;
+    let mut qam16 = false;
+    let mut lane = 0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--output-dir" => {
@@ -125,8 +191,14 @@ fn listen_output_directory() -> PathBuf {
                     std::process::exit(2);
                 }));
             }
+            "--robust" => robust = true,
+            "--fsk" => fsk = true,
+            "--qam16" => qam16 = true,
+            "--lane" => lane = required_lane(&mut args),
             "-h" | "--help" => {
-                println!("usage: listen [--output-dir received]");
+                println!(
+                    "usage: listen [--output-dir received] [--lane 0..1] [--qam16|--fsk|--robust]"
+                );
                 std::process::exit(0);
             }
             _ => {
@@ -135,13 +207,17 @@ fn listen_output_directory() -> PathBuf {
             }
         }
     }
-    output
+    (output, receive_mode(robust, fsk, qam16, lane))
 }
 
-fn decode_args() -> (PathBuf, PathBuf) {
+fn decode_args() -> (PathBuf, PathBuf, ReceiveMode) {
     let mut args = std::env::args().skip(1);
     let mut input = None;
     let mut output = PathBuf::from("received");
+    let mut robust = false;
+    let mut fsk = false;
+    let mut qam16 = false;
+    let mut lane = 0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--output-dir" => {
@@ -150,8 +226,14 @@ fn decode_args() -> (PathBuf, PathBuf) {
                     std::process::exit(2);
                 }));
             }
+            "--robust" => robust = true,
+            "--fsk" => fsk = true,
+            "--qam16" => qam16 = true,
+            "--lane" => lane = required_lane(&mut args),
             "-h" | "--help" => {
-                println!("usage: decode <recording.wav> [--output-dir received]");
+                println!(
+                    "usage: decode <recording.wav> [--output-dir received] [--lane 0..1] [--qam16|--fsk|--robust]"
+                );
                 std::process::exit(0);
             }
             _ if input.is_none() => input = Some(PathBuf::from(arg)),
@@ -165,7 +247,38 @@ fn decode_args() -> (PathBuf, PathBuf) {
         eprintln!("usage: decode <recording.wav> [--output-dir received]");
         std::process::exit(2);
     });
-    (input, output)
+    (input, output, receive_mode(robust, fsk, qam16, lane))
+}
+
+fn required_lane(args: &mut impl Iterator<Item = String>) -> u8 {
+    args.next()
+        .and_then(|value| value.parse::<u8>().ok())
+        .filter(|lane| *lane < MAX_LANES)
+        .unwrap_or_else(|| {
+            eprintln!("error: --lane requires a value in 0..{}", MAX_LANES - 1);
+            std::process::exit(2);
+        })
+}
+
+fn receive_mode(robust: bool, fsk: bool, qam16: bool, lane: u8) -> ReceiveMode {
+    if [robust, fsk, qam16]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count()
+        > 1
+    {
+        eprintln!("error: --robust, --fsk and --qam16 are mutually exclusive");
+        std::process::exit(2);
+    }
+    if robust {
+        ReceiveMode::Fsk(AcousticProfile::robust(lane))
+    } else if fsk {
+        ReceiveMode::Fsk(AcousticProfile::fast(lane))
+    } else if qam16 {
+        ReceiveMode::Hybrid(OfdmProfile::qam16(lane))
+    } else {
+        ReceiveMode::Hybrid(OfdmProfile::qpsk(lane))
+    }
 }
 
 fn handle_events(events: Vec<TransferEvent>, output_dir: &Path, style: OutputStyle) -> usize {

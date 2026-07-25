@@ -20,5 +20,17 @@ abstract class RxSession implements RustOpaqueInterface {
     outputDir: outputDir,
   );
 
+  static Future<RxSession> newWithProfile({
+    required int sampleRate,
+    required String outputDir,
+    required bool robust,
+    required int lane,
+  }) => RustLib.instance.api.crateApiRxRxSessionNewWithProfile(
+    sampleRate: sampleRate,
+    outputDir: outputDir,
+    robust: robust,
+    lane: lane,
+  );
+
   Future<List<MobileReceiveEvent>> pushPcm16({required List<int> pcm16Le});
 }

@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1067299211;
+  int get rustContentHash => 217356223;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,6 +85,13 @@ abstract class RustLibApi extends BaseApi {
     required String outputDir,
   });
 
+  Future<RxSession> crateApiRxRxSessionNewWithProfile({
+    required int sampleRate,
+    required String outputDir,
+    required bool robust,
+    required int lane,
+  });
+
   Future<List<MobileReceiveEvent>> crateApiRxRxSessionPushPcm16({
     required RxSession that,
     required List<int> pcm16Le,
@@ -98,9 +105,24 @@ abstract class RustLibApi extends BaseApi {
     required List<int> data,
   });
 
+  Future<TxSession> crateApiTxTxSessionFromDataWithProfile({
+    required String name,
+    String? contentType,
+    required List<int> data,
+    required bool robust,
+    required int lane,
+  });
+
   Future<TxSession> crateApiTxTxSessionFromFile({
     required String path,
     String? contentType,
+  });
+
+  Future<TxSession> crateApiTxTxSessionFromFileWithProfile({
+    required String path,
+    String? contentType,
+    required bool robust,
+    required int lane,
   });
 
   Future<TxInfo> crateApiTxTxSessionInfo({required TxSession that});
@@ -173,6 +195,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<RxSession> crateApiRxRxSessionNewWithProfile({
+    required int sampleRate,
+    required String outputDir,
+    required bool robust,
+    required int lane,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_32(sampleRate, serializer);
+          sse_encode_String(outputDir, serializer);
+          sse_encode_bool(robust, serializer);
+          sse_encode_u_8(lane, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRxSession,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiRxRxSessionNewWithProfileConstMeta,
+        argValues: [sampleRate, outputDir, robust, lane],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRxRxSessionNewWithProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "RxSession_new_with_profile",
+        argNames: ["sampleRate", "outputDir", "robust", "lane"],
+      );
+
+  @override
   Future<List<MobileReceiveEvent>> crateApiRxRxSessionPushPcm16({
     required RxSession that,
     required List<int> pcm16Le,
@@ -189,7 +251,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 3,
             port: port_,
           );
         },
@@ -223,7 +285,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 4,
             port: port_,
           );
         },
@@ -257,7 +319,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 5,
             port: port_,
           );
         },
@@ -280,6 +342,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<TxSession> crateApiTxTxSessionFromDataWithProfile({
+    required String name,
+    String? contentType,
+    required List<int> data,
+    required bool robust,
+    required int lane,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(name, serializer);
+          sse_encode_opt_String(contentType, serializer);
+          sse_encode_list_prim_u_8_loose(data, serializer);
+          sse_encode_bool(robust, serializer);
+          sse_encode_u_8(lane, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTxSession,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiTxTxSessionFromDataWithProfileConstMeta,
+        argValues: [name, contentType, data, robust, lane],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTxTxSessionFromDataWithProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "TxSession_from_data_with_profile",
+        argNames: ["name", "contentType", "data", "robust", "lane"],
+      );
+
+  @override
   Future<TxSession> crateApiTxTxSessionFromFile({
     required String path,
     String? contentType,
@@ -293,7 +397,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 7,
             port: port_,
           );
         },
@@ -316,6 +420,46 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<TxSession> crateApiTxTxSessionFromFileWithProfile({
+    required String path,
+    String? contentType,
+    required bool robust,
+    required int lane,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_opt_String(contentType, serializer);
+          sse_encode_bool(robust, serializer);
+          sse_encode_u_8(lane, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerTxSession,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiTxTxSessionFromFileWithProfileConstMeta,
+        argValues: [path, contentType, robust, lane],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiTxTxSessionFromFileWithProfileConstMeta =>
+      const TaskConstMeta(
+        debugName: "TxSession_from_file_with_profile",
+        argNames: ["path", "contentType", "robust", "lane"],
+      );
+
+  @override
   Future<TxInfo> crateApiTxTxSessionInfo({required TxSession that}) {
     return handler.executeNormal(
       NormalTask(
@@ -328,7 +472,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 9,
             port: port_,
           );
         },
@@ -363,7 +507,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 10,
             port: port_,
           );
         },
@@ -393,7 +537,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 11,
             port: port_,
           );
         },

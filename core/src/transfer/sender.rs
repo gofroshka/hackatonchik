@@ -14,6 +14,10 @@ use super::types::{Compression, TransferError, TransferMetadata, TransferPlan};
 
 const MANIFEST_REPEATS: usize = 2;
 const END_REPEATS: usize = 1;
+/// Re-broadcast the manifest this often so a receiver that missed the start
+/// (microphone warm-up, a corrupted opening frame) can still acquire the
+/// transfer and replay the shards it buffered while waiting.
+const MANIFEST_EVERY_GROUPS: usize = 3;
 
 pub fn build_transfer(
     name: &str,
@@ -87,10 +91,15 @@ pub fn build_transfer(
         for (index, shard) in shards.iter().enumerate() {
             packets.push(encode_shard(id, group as u32, index as u8, shard));
         }
-        if (group + 1) % 8 == 0 {
+        // Re-broadcast the manifest periodically, but not right before the
+        // trailing manifest we always append below.
+        if (group + 1) % MANIFEST_EVERY_GROUPS == 0 && group + 1 < groups {
             packets.push(manifest.clone());
         }
     }
+    // Always end with a manifest so a late listener can acquire and replay the
+    // buffered shards, then the end packet.
+    packets.push(manifest.clone());
     packets.extend(std::iter::repeat_n(end, END_REPEATS));
     debug_assert!(packets.iter().all(|packet| packet.len() <= MAX_PAYLOAD));
     Ok(TransferPlan { metadata, packets })

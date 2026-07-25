@@ -2,24 +2,69 @@ use std::path::Path;
 
 use sonic_share_core::output::save_received;
 use sonic_share_core::transfer::{is_chat_content_type, TransferEvent, TransferReceiver};
-use sonic_share_core::Decoder;
+use sonic_share_core::{AcousticProfile, Decoder, HybridDecoder, OfdmProfile, MAX_LANES};
 
 use super::types::MobileReceiveEvent;
 
 #[flutter_rust_bridge::frb(opaque)]
 pub struct RxSession {
-    decoder: Decoder,
+    decoder: MobileDecoder,
     transfers: TransferReceiver,
     output_dir: String,
 }
 
+enum MobileDecoder {
+    Fsk(Decoder),
+    Hybrid(HybridDecoder),
+}
+
+impl MobileDecoder {
+    fn push(&mut self, samples: &[f32]) {
+        match self {
+            Self::Fsk(decoder) => decoder.push(samples),
+            Self::Hybrid(decoder) => decoder.push(samples),
+        }
+    }
+
+    fn poll(&mut self) -> Option<Vec<u8>> {
+        match self {
+            Self::Fsk(decoder) => decoder.poll(),
+            Self::Hybrid(decoder) => decoder.poll(),
+        }
+    }
+}
+
 impl RxSession {
     pub fn new(sample_rate: u32, output_dir: String) -> Self {
-        Self {
-            decoder: Decoder::new(sample_rate),
+        Self::new_with_profile(sample_rate, output_dir, false, 0)
+            .expect("default acoustic profile is valid")
+    }
+
+    pub fn new_with_profile(
+        sample_rate: u32,
+        output_dir: String,
+        robust: bool,
+        lane: u8,
+    ) -> Result<Self, String> {
+        if lane >= MAX_LANES {
+            return Err(format!("lane must be in 0..{}", MAX_LANES - 1));
+        }
+        let decoder = if robust {
+            MobileDecoder::Fsk(Decoder::with_profile(
+                sample_rate,
+                AcousticProfile::robust(lane),
+            ))
+        } else {
+            MobileDecoder::Hybrid(HybridDecoder::with_sample_rate(
+                sample_rate,
+                OfdmProfile::qpsk(lane),
+            ))
+        };
+        Ok(Self {
+            decoder,
             transfers: TransferReceiver::new(),
             output_dir,
-        }
+        })
     }
 
     pub fn push_pcm16(&mut self, pcm16_le: Vec<u8>) -> Vec<MobileReceiveEvent> {

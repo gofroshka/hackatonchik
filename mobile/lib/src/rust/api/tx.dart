@@ -21,12 +21,38 @@ abstract class TxSession implements RustOpaqueInterface {
     data: data,
   );
 
+  static Future<TxSession> fromDataWithProfile({
+    required String name,
+    String? contentType,
+    required List<int> data,
+    required bool robust,
+    required int lane,
+  }) => RustLib.instance.api.crateApiTxTxSessionFromDataWithProfile(
+    name: name,
+    contentType: contentType,
+    data: data,
+    robust: robust,
+    lane: lane,
+  );
+
   static Future<TxSession> fromFile({
     required String path,
     String? contentType,
   }) => RustLib.instance.api.crateApiTxTxSessionFromFile(
     path: path,
     contentType: contentType,
+  );
+
+  static Future<TxSession> fromFileWithProfile({
+    required String path,
+    String? contentType,
+    required bool robust,
+    required int lane,
+  }) => RustLib.instance.api.crateApiTxTxSessionFromFileWithProfile(
+    path: path,
+    contentType: contentType,
+    robust: robust,
+    lane: lane,
   );
 
   Future<TxInfo> info();

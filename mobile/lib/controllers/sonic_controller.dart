@@ -26,6 +26,8 @@ class SonicController extends ChangeNotifier {
   int totalGroups = 0;
   String status = 'Готов к передаче';
   String? error;
+  bool robustProfile = false;
+  int acousticLane = 0;
   ReceivedTransfer? received;
   final List<ChatMessage> _chatMessages = [];
   TxSession? _tx;
@@ -35,6 +37,18 @@ class SonicController extends ChangeNotifier {
 
   bool get isBusy =>
       phase == TransferPhase.sending || phase == TransferPhase.listening;
+
+  void setRobustProfile(bool value) {
+    if (isBusy || robustProfile == value) return;
+    robustProfile = value;
+    notifyListeners();
+  }
+
+  void setAcousticLane(int value) {
+    if (isBusy || value < 0 || value > 1 || acousticLane == value) return;
+    acousticLane = value;
+    notifyListeners();
+  }
 
   Future<void> setMode(SonicMode value) async {
     if (mode == value) return;
@@ -79,7 +93,11 @@ class SonicController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      _tx = await TxSession.fromFile(path: file!.path!);
+      _tx = await TxSession.fromFileWithProfile(
+        path: file!.path!,
+        robust: robustProfile,
+        lane: acousticLane,
+      );
       txInfo = await _tx!.info();
       packetCount = txInfo!.packetCount;
       phase = TransferPhase.sending;
@@ -119,9 +137,11 @@ class SonicController extends ChangeNotifier {
     try {
       final documents = await getApplicationDocumentsDirectory();
       final output = '${documents.path}/Sonic Share';
-      _rx = await RxSession.newInstance(
+      _rx = await RxSession.newWithProfile(
         sampleRate: acousticSampleRate,
         outputDir: output,
+        robust: robustProfile,
+        lane: acousticLane,
       );
       phase = TransferPhase.listening;
       status = mode == SonicMode.chat
@@ -173,10 +193,12 @@ class SonicController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _tx = await TxSession.fromData(
+      _tx = await TxSession.fromDataWithProfile(
         name: 'chat-${now.millisecondsSinceEpoch}.txt',
         contentType: 'text/x-sonic-chat; charset=utf-8',
         data: utf8.encode(text),
+        robust: robustProfile,
+        lane: acousticLane,
       );
       txInfo = await _tx!.info();
       packetCount = txInfo!.packetCount;

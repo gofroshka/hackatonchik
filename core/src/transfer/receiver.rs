@@ -8,6 +8,15 @@ use super::geometry::{shard_geometry, SHARD_SIZE};
 use super::packet::{decode_packet, Packet};
 use super::types::{Compression, TransferEvent, TransferMetadata};
 
+const MAX_PENDING_TRANSFERS: usize = 16;
+const MAX_PENDING_SHARDS_PER_TRANSFER: usize = 96;
+
+struct PendingShard {
+    group: u32,
+    index: u8,
+    data: Vec<u8>,
+}
+
 #[derive(Debug)]
 struct IncomingTransfer {
     metadata: TransferMetadata,
@@ -18,6 +27,7 @@ struct IncomingTransfer {
 #[derive(Default)]
 pub struct TransferReceiver {
     incoming: HashMap<u64, IncomingTransfer>,
+    pending: HashMap<u64, Vec<PendingShard>>,
 }
 
 impl TransferReceiver {
@@ -67,7 +77,14 @@ impl TransferReceiver {
                 completed: HashMap::new(),
             },
         );
-        vec![TransferEvent::Started(metadata)]
+        let id = metadata.id;
+        let mut events = vec![TransferEvent::Started(metadata)];
+        if let Some(pending) = self.pending.remove(&id) {
+            for shard in pending {
+                events.extend(self.ingest_shard(id, shard.group, shard.index, shard.data));
+            }
+        }
+        events
     }
 
     fn ingest_shard(
@@ -78,6 +95,16 @@ impl TransferReceiver {
         data: Vec<u8>,
     ) -> Vec<TransferEvent> {
         let Some(transfer) = self.incoming.get_mut(&id) else {
+            if self.pending.contains_key(&id) || self.pending.len() < MAX_PENDING_TRANSFERS {
+                let pending = self.pending.entry(id).or_default();
+                if pending.len() < MAX_PENDING_SHARDS_PER_TRANSFER
+                    && !pending
+                        .iter()
+                        .any(|shard| shard.group == group && shard.index == index)
+                {
+                    pending.push(PendingShard { group, index, data });
+                }
+            }
             return Vec::new();
         };
         let (data_shards, parity_shards) = shard_geometry(transfer.metadata.encoded_size);
