@@ -107,7 +107,7 @@ impl RxSession {
                 }
             }
             TransferEvent::Failed { id, reason } => failed_event(id, reason),
-            TransferEvent::HandshakeRequest { id } => MobileReceiveEvent {
+            TransferEvent::HandshakeRequest { id, .. } => MobileReceiveEvent {
                 kind: "handshake_request".to_owned(),
                 id: format!("{id:016x}"),
                 name: None,
@@ -119,7 +119,7 @@ impl RxSession {
                 completed_groups: None,
                 total_groups: None,
             },
-            TransferEvent::HandshakeAck { id } => MobileReceiveEvent {
+            TransferEvent::HandshakeAck { id, .. } => MobileReceiveEvent {
                 kind: "handshake_ack".to_owned(),
                 id: format!("{id:016x}"),
                 name: None,
