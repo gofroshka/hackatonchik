@@ -80,6 +80,7 @@ class SonicController extends ChangeNotifier {
   Future<void> startSending() async {
     final file = selectedFile;
     if (file?.path == null || isBusy) return;
+    _cancelled = false;
     phase = TransferPhase.preparing;
     status = 'Подготовка FEC и метаданных…';
     error = null;
@@ -90,6 +91,7 @@ class SonicController extends ChangeNotifier {
       packetCount = txInfo!.packetCount;
 
       await _doHandshake();
+      if (_cancelled) return;
 
       phase = TransferPhase.sending;
       status = 'Передача через динамик';
@@ -103,16 +105,19 @@ class SonicController extends ChangeNotifier {
           notifyListeners();
         },
       );
-      if (phase == TransferPhase.error) return;
+      if (_cancelled) return;
 
       await _doEndHandshake();
+      if (_cancelled) return;
 
       phase = TransferPhase.completed;
       progress = 1;
       status = 'Передача завершена';
       notifyListeners();
     } catch (exception) {
-      _setError(exception.toString());
+      if (!_cancelled) {
+        _setError(exception.toString());
+      }
     }
   }
 
@@ -120,25 +125,29 @@ class SonicController extends ChangeNotifier {
     final requestPcm = await handshakeRequestPcm(id: BigInt.zero);
 
     for (var attempt = 0; attempt < 8; attempt++) {
-      if (phase == TransferPhase.error) return;
+      if (_cancelled) return;
 
       phase = TransferPhase.handshaking;
       status = 'Рукопожатие: попытка ${attempt + 1}';
       notifyListeners();
 
       await _audio.prepareForPlayback();
+      if (_cancelled) return;
       await _audio.playPcmTight(requestPcm);
+      if (_cancelled) return;
 
       phase = TransferPhase.handshakeWaitAck;
       status = 'Ожидание ответа…';
       notifyListeners();
 
       final recorded = await _audio.recordShort(const Duration(milliseconds: 1200));
+      if (_cancelled) return;
       if (recorded != null && recorded.isNotEmpty) {
         final events = await checkPcmForHandshake(
           pcm16Le: recorded,
           sampleRate: acousticSampleRate,
         );
+        if (_cancelled) return;
         for (final event in events) {
           if (event.kind == 'handshake_ack') {
             await _audio.prepareForPlayback();
@@ -149,25 +158,31 @@ class SonicController extends ChangeNotifier {
         }
       }
     }
-    throw 'Не удалось выполнить рукопожатие. Убедитесь, что приёмник включён и находится рядом.';
+    if (!_cancelled) {
+      throw 'Не удалось выполнить рукопожатие. Убедитесь, что приёмник включён и находится рядом.';
+    }
   }
 
   Future<void> _doEndHandshake() async {
+    if (_cancelled) return;
     await Future.delayed(const Duration(milliseconds: 300));
+    if (_cancelled) return;
 
     for (var attempt = 0; attempt < 5; attempt++) {
-      if (phase == TransferPhase.error) return;
+      if (_cancelled) return;
 
       phase = TransferPhase.endWaitAck;
       status = 'Подтверждение получения…';
       notifyListeners();
 
       final recorded = await _audio.recordShort(const Duration(milliseconds: 600));
+      if (_cancelled) return;
       if (recorded != null && recorded.isNotEmpty) {
         final events = await checkPcmForHandshake(
           pcm16Le: recorded,
           sampleRate: acousticSampleRate,
         );
+        if (_cancelled) return;
         for (final event in events) {
           if (event.kind == 'end_ack') {
             status = 'Подтверждено!';
@@ -177,8 +192,10 @@ class SonicController extends ChangeNotifier {
         }
       }
     }
-    status = 'Файл отправлен (без подтверждения)';
-    notifyListeners();
+    if (!_cancelled) {
+      status = 'Файл отправлен (без подтверждения)';
+      notifyListeners();
+    }
   }
 
   Future<void> startReceiving() async {

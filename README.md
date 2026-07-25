@@ -38,6 +38,7 @@ Sonic Share передаёт файлы и текстовые сообщения
 Проверить установленные инструменты можно командами:
 
 ```bash
+rustup --version
 rustc --version
 cargo --version
 flutter doctor
